@@ -17,7 +17,6 @@ flatpak_remote() {
         dry_run_msg flatpak remote-add --if-not-exists flathub \
             https://dl.flathub.org/repo/flathub.flatpakrepo
         printf '> [dry-run] configuraria o remote flathub\n'
-        CONFIGS_PLANNED+=('Flathub remote')
         return 0
     fi
     if run_cmd 'configurar flathub' flatpak remote-add --if-not-exists flathub \

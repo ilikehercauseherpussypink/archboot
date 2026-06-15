@@ -23,7 +23,6 @@ configure_prefix() {
     if (( DRY_RUN )); then
         run_cmd 'configurar prefixo npm' npm config set prefix "$CODEX_PREFIX"
         printf '> [dry-run] configuraria o prefixo npm em %s\n' "$CODEX_PREFIX"
-        CONFIGS_PLANNED+=('Codex npm prefix')
         return 0
     fi
     if run_cmd 'configurar prefixo npm' npm config set prefix "$CODEX_PREFIX"; then
@@ -40,7 +39,6 @@ install_codex() {
     if (( DRY_RUN )); then
         printf '> [dry-run] instalaria Codex CLI em %s/bin\n' "$CODEX_PREFIX"
         run_cmd 'instalar Codex CLI' npm install -g @openai/codex
-        CONFIGS_PLANNED+=('Codex CLI')
         return 0
     fi
     info 'instalando @openai/codex'
@@ -64,7 +62,6 @@ _append_path_line() {
     fi
     if (( DRY_RUN )); then
         printf '> [dry-run] configuraria PATH em %s\n' "$file"
-        CONFIGS_PLANNED+=("Codex PATH ($file)")
         return 0
     fi
     mkdir -p "$(dirname "$file")"
@@ -77,7 +74,6 @@ _append_path_line() {
 
 configure_path() {
     local fish_config="$HOME/.config/fish/config.fish" already_before=${#CODEX_PATH_ALREADY[@]} already_count
-    CODEX_PREVIOUS_COMMAND=$(command -v codex 2>/dev/null || true)
     _append_path_line "$HOME/.profile" "$CODEX_PATH_LINE"
     [[ -f $HOME/.bashrc ]] && _append_path_line "$HOME/.bashrc" "$CODEX_PATH_LINE"
     [[ -f $HOME/.zshrc ]] && _append_path_line "$HOME/.zshrc" "$CODEX_PATH_LINE"
@@ -89,5 +85,4 @@ configure_path() {
         skip "$already_count arquivos PATH já configurados"
     fi
     export PATH="$CODEX_PREFIX/bin:$PATH"
-    export CODEX_PREVIOUS_COMMAND
 }

@@ -13,19 +13,29 @@ initial_banner() {
 }
 
 EARLY_PLAN=0
+EARLY_VERSION=0
 for argument in "$@"; do
-    if [[ $argument == --version ]]; then
-        if [[ -z ${BASH_SOURCE[0]:-} && ! -t 0 ]]; then
-            while IFS= read -r _; do :; done
-        fi
-        printf 'archboot %s\n' "$ARCHBOOT_VERSION"
-        exit 0
-    fi
-    [[ $argument == --plan ]] && EARLY_PLAN=1
+    case $argument in
+        --version) EARLY_VERSION=1 ;;
+        --plan) EARLY_PLAN=1 ;;
+        --verbose|--dry-run|--yes|--no-packages|--no-pacman|--no-flatpak|--no-aur|\
+            --no-services|--no-codex|--no-git|--no-ssh|--no-github|--help|-h) ;;
+        *)
+            printf '> [error] opção desconhecida: %s\n' "$argument" >&2
+            exit 2
+            ;;
+    esac
 done
+if (( EARLY_VERSION )); then
+    if [[ -z ${BASH_SOURCE[0]:-} && ! -t 0 ]]; then
+        while IFS= read -r _; do :; done
+    fi
+    printf 'archboot %s\n' "$ARCHBOOT_VERSION"
+    exit 0
+fi
 
 bootstrap_project() {
-    local script_path script_dir repo_url archive_url temp_dir archive
+    local script_path script_dir repo_url archive_url temp_dir='' archive path
 
     script_path=${BASH_SOURCE[0]:-}
     if [[ -n $script_path && -f $script_path ]]; then
@@ -53,20 +63,31 @@ bootstrap_project() {
     repo_url=${ARCHBOOT_REPO%/}
     repo_url=${repo_url%.git}
     archive_url="$repo_url/archive/refs/heads/$ARCHBOOT_BRANCH.tar.gz"
-    temp_dir=$(mktemp -d)
-    chmod 700 "$temp_dir"
-    archive="$temp_dir/archboot.tar.gz"
-
+    if ! temp_dir=$(mktemp -d); then
+        printf '> [error] não foi possível criar diretório temporário seguro\n' >&2
+        exit 1
+    fi
     # Invocada indiretamente pelo trap.
     # shellcheck disable=SC2317,SC2329
     cleanup_bootstrap() {
-        rm -rf -- "$temp_dir"
+        [[ -n $temp_dir && -d $temp_dir ]] && rm -rf -- "$temp_dir"
     }
-    trap cleanup_bootstrap EXIT INT TERM
+    trap cleanup_bootstrap EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    if ! chmod 700 "$temp_dir"; then
+        printf '> [error] não foi possível proteger o diretório temporário\n' >&2
+        exit 1
+    fi
+    archive="$temp_dir/archboot.tar.gz"
 
     printf '> [info] baixando projeto completo\n'
     if ! curl -fsSL "$archive_url" -o "$archive"; then
         printf '> [error] falha ao baixar: %s\n' "$archive_url" >&2
+        exit 1
+    fi
+    if [[ ! -s $archive ]]; then
+        printf '> [error] tarball baixado está vazio\n' >&2
         exit 1
     fi
     mkdir -p "$temp_dir/project"
@@ -74,10 +95,16 @@ bootstrap_project() {
         printf '> [error] falha ao extrair o projeto\n' >&2
         exit 1
     fi
-    if [[ ! -f $temp_dir/project/install.sh ]]; then
-        printf '> [error] install.sh não encontrado no tarball\n' >&2
-        exit 1
-    fi
+    for path in install.sh lib apps services; do
+        if [[ $path == install.sh && ! -s $temp_dir/project/$path ]]; then
+            printf '> [error] install.sh não encontrado no tarball\n' >&2
+            exit 1
+        fi
+        if [[ $path != install.sh && ! -d $temp_dir/project/$path ]]; then
+            printf '> [error] diretório %s/ não encontrado no tarball\n' "$path" >&2
+            exit 1
+        fi
+    done
 
     printf '> [ok] projeto carregado em diretório temporário\n'
     set +e
@@ -141,7 +168,6 @@ TOTAL_STEPS=13
 PACMAN_BLOCKED=0
 LOG_FILE=/dev/null
 declare -ag FAILURES=()
-declare -ag VALIDATION_FAILURES=() CONFIGS_PLANNED=()
 declare -ag DISABLED_FEATURES=()
 
 usage() {
@@ -432,7 +458,6 @@ main() {
     read_services
     if ! validate_apps; then
         warn 'há entradas com formato improvável; a instalação continuará'
-        VALIDATION_FAILURES+=('formato de apps')
     fi
     print_plan
     print_services_plan

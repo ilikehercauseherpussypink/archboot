@@ -33,7 +33,6 @@ configure_git() {
                 run_cmd 'git user.name' git config --global user.name "$name"
                 run_cmd 'git user.email' git config --global user.email "$email"
                 printf '> [dry-run] configuraria identidade Git global\n'
-                CONFIGS_PLANNED+=('Git identity')
             else
                 run_cmd 'git user.name' git config --global user.name "$name" \
                     && run_cmd 'git user.email' git config --global user.email "$email"
@@ -42,11 +41,9 @@ configure_git() {
         fi
     fi
 
-    (( DRY_RUN )) && CONFIGS_PLANNED+=('Git init.defaultBranch' 'Git pull.rebase')
     run_cmd 'branch padrão Git' git config --global init.defaultBranch main || true
     run_cmd 'estratégia pull Git' git config --global pull.rebase false || true
     if command_exists code; then
-        (( DRY_RUN )) && CONFIGS_PLANNED+=('Git core.editor')
         run_cmd 'editor Git' git config --global core.editor 'code --wait' || true
     fi
 

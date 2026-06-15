@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+* Initial technical hardening.
+* Expanded structural, argument, security and bootstrap checks.
+* Removed unused internal state.
+* Strengthened argument and bootstrap validation.
+
 ## v0.1.1
 
 * Release tag aligned with the current published state.

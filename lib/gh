@@ -225,7 +225,6 @@ github_manage_ssh_key() {
         GITHUB_OLD_KEYS_STATUS='dry-run'
         # shellcheck disable=SC2034
         GITHUB_NEW_KEY_STATUS='dry-run'
-        CONFIGS_PLANNED+=("GitHub SSH key ($GITHUB_KEY_TITLE)")
         return 0
     fi
 

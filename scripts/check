@@ -12,11 +12,14 @@ step()  { printf '\n> Etapa %s/%s: %s\n' "$1" "$2" "$3"; }
 failures=0
 
 check_file() {
-    if [[ -f $1 ]]; then
-        ok "$1"
-    else
+    if [[ ! -f $1 ]]; then
         error "arquivo ausente: $1"
         ((failures += 1))
+    elif [[ ! -s $1 ]]; then
+        error "arquivo obrigatório vazio: $1"
+        ((failures += 1))
+    else
+        ok "$1"
     fi
 }
 
@@ -48,6 +51,14 @@ required=(
 )
 for file in "${required[@]}"; do
     check_file "$file"
+done
+for file in install.sh scripts/check scripts/github; do
+    if [[ -x $file ]] && head -n 1 "$file" | grep -Fqx '#!/usr/bin/env bash'; then
+        ok "$file é executável com shebang Bash"
+    else
+        error "$file precisa ser executável com shebang Bash"
+        ((failures += 1))
+    fi
 done
 
 step 2 10 'validando sintaxe Bash'
@@ -132,8 +143,151 @@ else
     ok 'nenhum eval inseguro encontrado'
 fi
 
+unsafe_cleanup=0
+while IFS= read -r cleanup_line; do
+    # Os padrões verificam texto-fonte literal, sem expansão nesta execução.
+    # shellcheck disable=SC2016
+    case $cleanup_line in
+        *'rm -rf -- "$temp_dir"'*|*'rm -rf -- "$build_dir"'*) ;;
+        *)
+            error "remoção recursiva não reconhecida: $cleanup_line"
+            unsafe_cleanup=1
+            ;;
+    esac
+done < <(grep -REn 'rm[[:space:]]+-rf' install.sh lib scripts/github 2>/dev/null || true)
+if (( unsafe_cleanup )); then
+    ((failures += 1))
+else
+    ok 'remoções temporárias usam diretórios conhecidos e delimitador --'
+fi
+if grep -REn '(chmod|chown)[[:space:]]+(-[[:alnum:]]*R|--recursive)' \
+    install.sh lib scripts/github >/dev/null 2>&1; then
+    error 'chmod/chown recursivo encontrado'
+    ((failures += 1))
+else
+    ok 'nenhum chmod/chown recursivo encontrado'
+fi
+if grep -REn 'curl[^|]*\|[[:space:]]*(bash|sh)|wget[^|]*\|[[:space:]]*(bash|sh)' \
+    install.sh lib scripts/github .github cloudflare/worker.js >/dev/null 2>&1; then
+    error 'pipe remoto para shell encontrado no código executável'
+    ((failures += 1))
+else
+    ok 'nenhum curl/wget pipe shell interno encontrado'
+fi
+if grep -REn 'git[[:space:]]+(push|tag)[^#]*--force|git[[:space:]]+tag[[:space:]]+-f' \
+    install.sh lib scripts/github .github >/dev/null 2>&1; then
+    error 'operação Git forçada encontrada'
+    ((failures += 1))
+else
+    ok 'nenhum git push/tag forçado encontrado'
+fi
+if grep -REn '(rm|unlink)[^#]*/var/lib/pacman/db\.lck' \
+    install.sh lib scripts/github >/dev/null 2>&1; then
+    error 'remoção automática do lock do pacman encontrada'
+    ((failures += 1))
+else
+    ok 'lock do pacman nunca é removido automaticamente'
+fi
+
+tracked_sensitive=''
+if [[ -d .git ]]; then
+    tracked_sensitive=$(git ls-files | grep -E \
+        '(^|/)(\.env($|\.)|wrangler\.toml$|id_ed25519(\.pub)?$)|\.(key|pem|log)$|(^|/)(node_modules|\.cache|tmp)/' \
+        || true)
+fi
+if [[ -n $tracked_sensitive ]]; then
+    error 'arquivos sensíveis ou gerados estão versionados:'
+    printf '%s\n' "$tracked_sensitive" >&2
+    ((failures += 1))
+else
+    ok 'nenhum artefato sensível ou gerado está versionado'
+fi
+
+# Os tokens verificam texto-fonte literal, sem expansão nesta execução.
+# shellcheck disable=SC2016
+bootstrap_tokens=(
+    'temp_dir=$(mktemp -d)'
+    '[[ ! -s $archive ]]'
+    'trap cleanup_bootstrap EXIT'
+    'for path in install.sh lib apps services'
+)
+for token in "${bootstrap_tokens[@]}"; do
+    if ! grep -Fq "$token" install.sh; then
+        error "bootstrap sem proteção esperada: $token"
+        ((failures += 1))
+    fi
+done
+
 ssh_test_home=$(mktemp -d)
 trap 'rm -rf -- "$ssh_test_home"' EXIT
+bootstrap_bin="$ssh_test_home/bootstrap-bin"
+mkdir -p "$bootstrap_bin"
+cat >"$bootstrap_bin/mktemp" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p "$BOOTSTRAP_TEMP"
+printf '%s\n' "$BOOTSTRAP_TEMP"
+EOF
+cat >"$bootstrap_bin/curl" <<'EOF'
+#!/usr/bin/env bash
+output=''
+while (($#)); do
+    if [[ $1 == -o ]]; then
+        output=$2
+        shift 2
+    else
+        shift
+    fi
+done
+[[ -n $output ]] || exit 2
+if [[ $BOOTSTRAP_MODE == empty ]]; then
+    : >"$output"
+else
+    printf 'mock archive\n' >"$output"
+fi
+EOF
+cat >"$bootstrap_bin/tar" <<'EOF'
+#!/usr/bin/env bash
+destination=''
+while (($#)); do
+    if [[ $1 == -C ]]; then
+        destination=$2
+        shift 2
+    else
+        shift
+    fi
+done
+[[ -n $destination ]] || exit 2
+mkdir -p "$destination"
+printf '#!/usr/bin/env bash\n' >"$destination/install.sh"
+EOF
+chmod +x "$bootstrap_bin/mktemp" "$bootstrap_bin/curl" "$bootstrap_bin/tar"
+
+bootstrap_empty_dir="$ssh_test_home/bootstrap-empty"
+if bootstrap_empty_output=$(BOOTSTRAP_TEMP="$bootstrap_empty_dir" BOOTSTRAP_MODE=empty \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou tarball vazio'
+    ((failures += 1))
+elif grep -Fq 'tarball baixado está vazio' <<<"$bootstrap_empty_output" \
+    && [[ ! -e $bootstrap_empty_dir ]]; then
+    ok 'bootstrap rejeita tarball vazio e limpa temporário'
+else
+    error 'bootstrap vazio falhou sem mensagem ou limpeza esperada'
+    ((failures += 1))
+fi
+
+bootstrap_incomplete_dir="$ssh_test_home/bootstrap-incomplete"
+if bootstrap_incomplete_output=$(BOOTSTRAP_TEMP="$bootstrap_incomplete_dir" BOOTSTRAP_MODE=incomplete \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou tarball sem estrutura modular'
+    ((failures += 1))
+elif grep -Fq 'diretório lib/ não encontrado no tarball' <<<"$bootstrap_incomplete_output" \
+    && [[ ! -e $bootstrap_incomplete_dir ]]; then
+    ok 'bootstrap rejeita estrutura incompleta e limpa temporário'
+else
+    error 'bootstrap incompleto falhou sem mensagem ou limpeza esperada'
+    ((failures += 1))
+fi
+
 ssh_normalize() {
     HOME=$ssh_test_home bash -c \
         'source lib/log; source lib/ssh; _normalize_ssh_key_path "$1"' _ "$1"
@@ -184,8 +338,8 @@ fi
 
 step 5 10 'validando controles do instalador'
 controls_fail=0
-version_output=$(bash install.sh --version 2>&1 || true)
-if piped_version_output=$(set -o pipefail; sed -n p install.sh | bash -s -- --version) \
+if version_output=$(bash install.sh --version 2>&1) \
+    && piped_version_output=$(set -o pipefail; sed -n p install.sh | bash -s -- --version) \
     && [[ $version_output == 'archboot 0.1.1' ]] \
     && [[ $piped_version_output == 'archboot 0.1.1' ]] \
     && grep -Fq '## v0.1.1' CHANGELOG.md; then
@@ -195,7 +349,11 @@ else
     controls_fail=1
 fi
 
-help_output=$(bash install.sh --help 2>&1 || true)
+if ! help_output=$(bash install.sh --help 2>&1); then
+    error '--help retornou status diferente de zero'
+    controls_fail=1
+    help_output=''
+fi
 help_flags=(
     --dry-run --verbose --plan --version --yes --no-packages --no-pacman
     --no-flatpak --no-aur --no-services --no-codex --no-git --no-ssh --no-github
@@ -206,6 +364,22 @@ for flag in "${help_flags[@]}"; do
         controls_fail=1
     fi
 done
+
+if unknown_output=$(bash install.sh --unknown-flag 2>&1); then
+    error 'flag desconhecida retornou sucesso'
+    controls_fail=1
+elif grep -Fq 'opção desconhecida: --unknown-flag' <<<"$unknown_output"; then
+    ok 'flag desconhecida falha com mensagem clara'
+else
+    error 'flag desconhecida falhou sem mensagem clara'
+    controls_fail=1
+fi
+if bash install.sh --version --unknown-flag >/dev/null 2>&1; then
+    error '--version ignorou flag desconhecida combinada'
+    controls_fail=1
+else
+    ok '--version não ignora argumentos inválidos'
+fi
 
 if plan_output=$(bash install.sh --plan 2>&1) \
     && grep -Fq 'archboot 0.1.1' <<<"$plan_output" \
@@ -218,10 +392,21 @@ if plan_output=$(bash install.sh --plan 2>&1) \
     && grep -Fq 'git: enabled' <<<"$plan_output" \
     && grep -Fq 'ssh/github: enabled' <<<"$plan_output" \
     && ! grep -Fq '[ask]' <<<"$plan_output" \
-    && ! grep -Fq '> Etapa' <<<"$plan_output"; then
+    && ! grep -Fq '> Etapa' <<<"$plan_output" \
+    && ! grep -Eq '(pacman -S|flatpak (install|remote-add)|yay -S|paru -S|systemctl .*enable|npm (config|install)|gh (auth|ssh-key)|ssh-keygen)' <<<"$plan_output"; then
     ok '--plan é somente leitura e não interativo'
 else
     error '--plan não produziu o plano resumido esperado'
+    controls_fail=1
+fi
+
+if verbose_plan_output=$(bash install.sh --plan --verbose 2>&1) \
+    && grep -Fq 'categories' <<<"$verbose_plan_output" \
+    && grep -Fq 'apps' <<<"$verbose_plan_output" \
+    && ! grep -Fq '[ask]' <<<"$verbose_plan_output"; then
+    ok '--plan --verbose permanece somente leitura'
+else
+    error '--plan --verbose falhou ou pediu input'
     controls_fail=1
 fi
 
@@ -268,6 +453,16 @@ if ci_dry_output=$(ARCHBOOT_CI=1 bash install.sh "${ci_args[@]}" 2>&1) \
     ok 'CI dry-run respeita flags sem executar fontes desativadas'
 else
     error 'CI dry-run ou flags --no-* falharam'
+    controls_fail=1
+fi
+
+yes_args=(--dry-run --yes --no-packages --no-services --no-ssh --no-github --no-codex --no-git)
+if yes_output=$(ARCHBOOT_CI=1 bash install.sh "${yes_args[@]}" 2>&1) \
+    && ! grep -Fq '[ask]' <<<"$yes_output" \
+    && grep -Fq '[skip] SSH desativado por flag' <<<"$yes_output"; then
+    ok '--yes combinado com --no-* não bloqueia nem executa ações desativadas'
+else
+    error '--yes combinado com --no-* falhou ou pediu input'
     controls_fail=1
 fi
 
@@ -332,7 +527,6 @@ if ssh_add_output=$(HOME="$ssh_test_home" PATH="$fake_bin:$PATH" SSH_AUTH_SOCK=m
         VERBOSE=0
         LOG_FILE=$1
         FAILURES=()
-        CONFIGS_PLANNED=()
         GIT_EMAIL=mock@example
         configure_ssh
     ' _ "$ssh_add_log" 2>&1) \
@@ -361,7 +555,6 @@ if github_dry_output=$(HOME="$ssh_test_home" PATH="$fake_bin:$PATH" bash -c '
     DRY_RUN=1
     VERBOSE=0
     LOG_FILE=/dev/null
-    CONFIGS_PLANNED=()
     FAILURES=()
     github_manage_ssh_key "$HOME/.ssh/test.pub"
 ' 2>&1) \
@@ -408,7 +601,6 @@ github_list_mock() {
         VERBOSE=0
         LOG_FILE=/dev/null
         FAILURES=()
-        CONFIGS_PLANNED=()
 
         case "$1" in
             empty)
@@ -524,7 +716,6 @@ service_mock() {
         [[ $MODE == dry ]] && DRY_RUN=1
         LOG_FILE=/dev/null
         FAILURES=()
-        CONFIGS_PLANNED=()
         systemctl() {
             case ${1:-} in
                 cat)
@@ -685,6 +876,9 @@ worker_tokens=(
     '"GET"'
     '"HEAD"'
     '"/health"'
+    '"/install.sh"'
+    '"method not allowed", 405'
+    '"not found", 404'
     'method,'
     'text/x-shellscript; charset=utf-8'
     'X-Content-Type-Options'

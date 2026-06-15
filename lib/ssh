@@ -38,7 +38,6 @@ _set_ssh_permissions() {
         [[ $key_dir == "$HOME/.ssh" ]] || dry_run_msg chmod 700 "$key_dir"
         dry_run_msg chmod 600 "$private_key"
         dry_run_msg chmod 644 "$public_key"
-        CONFIGS_PLANNED+=('SSH permissions')
         return 0
     fi
     mkdir -p "$key_dir"
@@ -109,7 +108,6 @@ configure_ssh() {
             printf '> [dry-run] criaria chave SSH em %s\n' "$SSH_PRIVATE_KEY"
             dry_run_msg ssh-keygen -t ed25519 -C "$email" -f "$SSH_PRIVATE_KEY"
             _set_ssh_permissions "$SSH_PRIVATE_KEY" "$SSH_PUBLIC_KEY"
-            CONFIGS_PLANNED+=("SSH key ($SSH_PRIVATE_KEY)")
         else
             mkdir -p "$HOME/.ssh"
             chmod 700 "$HOME/.ssh"

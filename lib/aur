@@ -26,7 +26,7 @@ detect() {
 }
 
 bootstrap_paru() {
-    local build_dir
+    local build_dir='' status=0
     if (( PACMAN_BLOCKED )); then
         warn 'paru não pode ser instalado enquanto o pacman estiver bloqueado'
         return 1
@@ -43,24 +43,27 @@ bootstrap_paru() {
         printf '> [dry-run] instalaria o AUR helper paru\n'
         dry_run_msg git clone https://aur.archlinux.org/paru.git /tmp/archboot-paru
         dry_run_msg makepkg -si --noconfirm
-        CONFIGS_PLANNED+=('AUR helper paru')
         AUR_HELPER=paru
         return 0
     fi
-    build_dir=$(mktemp -d)
+    if ! build_dir=$(mktemp -d); then
+        error 'não foi possível criar diretório temporário para o paru'
+        FAILURES+=('aur:paru')
+        return 1
+    fi
     # $1 é expandido pelo Bash filho, com o diretório passado como argumento.
     # shellcheck disable=SC2016
     if run_cmd 'baixar paru' git clone https://aur.archlinux.org/paru.git "$build_dir/paru" \
         && run_cmd 'compilar paru' bash -c 'cd "$1" && makepkg -si --noconfirm' _ "$build_dir/paru"; then
         AUR_HELPER=paru
         ok 'paru instalado'
-        rm -rf "$build_dir"
-        return 0
+    else
+        error 'falha ao instalar paru'
+        FAILURES+=('aur:paru')
+        status=1
     fi
-    rm -rf "$build_dir"
-    error 'falha ao instalar paru'
-    FAILURES+=('aur:paru')
-    return 1
+    rm -rf -- "$build_dir"
+    return "$status"
 }
 
 install() {
