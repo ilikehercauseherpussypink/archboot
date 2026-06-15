@@ -145,7 +145,7 @@ print_pubkey() {
         return 0
     fi
     [[ -r $SSH_PUBLIC_KEY ]] || return 1
-    printf 'PUBLIC SSH KEY (%s): %s\n' "$SSH_PUBLIC_KEY" "$(<"$SSH_PUBLIC_KEY")" >>"$LOG_FILE"
+    printf 'PUBLIC SSH KEY PATH: %s\n' "$SSH_PUBLIC_KEY" >>"$LOG_FILE"
     printf '\n> Chave pública SSH\n'
     cat "$SSH_PUBLIC_KEY"
     printf '\n'
@@ -169,8 +169,8 @@ test_github_ssh() {
     output=$(ssh -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1)
     status=$?
     set -e
-    printf '%s\n' "$output" >>"$LOG_FILE"
-    (( VERBOSE )) && printf '%s\n' "$output"
+    printf '%s\n' "$output" | redact_sensitive >>"$LOG_FILE"
+    (( VERBOSE )) && printf '%s\n' "$output" | redact_sensitive
     if [[ $output == *'successfully authenticated'* \
         || $output == *"You've successfully authenticated"* \
         || $output == *'does not provide shell access'* ]]; then

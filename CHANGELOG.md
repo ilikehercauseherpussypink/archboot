@@ -6,6 +6,8 @@
 * Expanded structural, argument, security and bootstrap checks.
 * Removed unused internal state.
 * Strengthened argument and bootstrap validation.
+* Hardened remote repository, branch, tarball and extraction validation.
+* Added log redaction and restrictive log permissions.
 
 ## v0.1.1
 

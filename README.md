@@ -85,6 +85,8 @@ Flags disponíveis:
 
 O instalador executa 13 etapas. Quando recebido sozinho pelo domínio curto, o `install.sh` baixa o projeto completo pelo tarball da branch configurada e continua a execução a partir de um diretório temporário seguro.
 
+Overrides remotos aceitam somente repositórios GitHub HTTPS no formato `https://github.com/OWNER/REPO` e nomes de branch sem espaços, traversal ou metacaracteres de shell.
+
 ## Apps
 
 As listas são editáveis e ficam separadas por fonte e categoria:
@@ -288,6 +290,7 @@ O archboot não promete desinstalação automática completa. Para desfazer part
 * O pacman lock nunca é removido automaticamente.
 * Pacotes não são removidos automaticamente.
 * Arquivos SSH locais nunca são deletados pelo instalador.
+* Logs usam permissões restritas e removem padrões comuns de tokens e chaves privadas.
 
 ## License
 

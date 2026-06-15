@@ -128,7 +128,7 @@ if grep -En 'git[[:space:]]+(diff|status)' install.sh >/dev/null 2>&1; then
 else
     ok 'install.sh não imprime diff/status'
 fi
-bootstrap_repo_default="ARCHBOOT_REPO=\${ARCHBOOT_REPO:-https://github.com/ilikehercauseherpussypink/archboot}"
+bootstrap_repo_default="ARCHBOOT_REPO=\${ARCHBOOT_REPO-https://github.com/ilikehercauseherpussypink/archboot}"
 if grep -Fq "$bootstrap_repo_default" install.sh; then
     ok 'bootstrap remoto aponta para o repositório publicado'
 else
@@ -209,7 +209,13 @@ bootstrap_tokens=(
     'temp_dir=$(mktemp -d)'
     '[[ ! -s $archive ]]'
     'trap cleanup_bootstrap EXIT'
-    'for path in install.sh lib apps services'
+    'validate_bootstrap_repo "$ARCHBOOT_REPO"'
+    'validate_bootstrap_branch "$ARCHBOOT_BRANCH"'
+    'curl -fsSL --retry 3 --connect-timeout 10 --max-time 120'
+    'tar -tzf "$archive"'
+    'tar -xzf "$archive" --no-same-owner --no-same-permissions'
+    'if ((${#roots[@]} != 1))'
+    '((${#FAILURES[@]} == 0))'
 )
 for token in "${bootstrap_tokens[@]}"; do
     if ! grep -Fq "$token" install.sh; then
@@ -230,6 +236,7 @@ EOF
 cat >"$bootstrap_bin/curl" <<'EOF'
 #!/usr/bin/env bash
 output=''
+printf '%s\n' "$@" >"$CURL_ARGS_FILE"
 while (($#)); do
     if [[ $1 == -o ]]; then
         output=$2
@@ -242,12 +249,35 @@ done
 if [[ $BOOTSTRAP_MODE == empty ]]; then
     : >"$output"
 else
-    printf 'mock archive\n' >"$output"
+    head -c 2048 /dev/zero >"$output"
 fi
 EOF
 cat >"$bootstrap_bin/tar" <<'EOF'
 #!/usr/bin/env bash
 destination=''
+if [[ $1 == -tzf ]]; then
+    case $BOOTSTRAP_MODE in
+        incomplete)
+            printf 'archboot-main/\narchboot-main/install.sh\n'
+            ;;
+        multiple)
+            printf '%s\n' \
+                'archboot-main/install.sh' 'archboot-main/lib/' 'archboot-main/apps/' 'archboot-main/services/' \
+                'other/install.sh' 'other/lib/' 'other/apps/' 'other/services/'
+            ;;
+        traversal)
+            printf '../outside/install.sh\n'
+            ;;
+        outside)
+            printf '%s\n' 'archboot-main/install.sh' 'archboot-main/lib/' 'archboot-main/apps/' 'archboot-main/services/'
+            ;;
+        valid)
+            printf '%s\n' 'archboot-main/install.sh' 'archboot-main/lib/' 'archboot-main/apps/' 'archboot-main/services/'
+            ;;
+        *) exit 2 ;;
+    esac
+    exit 0
+fi
 while (($#)); do
     if [[ $1 == -C ]]; then
         destination=$2
@@ -258,12 +288,24 @@ while (($#)); do
 done
 [[ -n $destination ]] || exit 2
 mkdir -p "$destination"
-printf '#!/usr/bin/env bash\n' >"$destination/install.sh"
+if [[ $BOOTSTRAP_MODE == outside ]]; then
+    mkdir -p "$BOOTSTRAP_OUTSIDE"
+    ln -s "$BOOTSTRAP_OUTSIDE" "$destination/archboot-main"
+    exit 0
+fi
+mkdir -p "$destination/archboot-main"
+printf '#!/usr/bin/env bash\nprintf "mock project loaded\\n"\n' \
+    >"$destination/archboot-main/install.sh"
+if [[ $BOOTSTRAP_MODE == valid ]]; then
+    mkdir -p "$destination/archboot-main/lib" \
+        "$destination/archboot-main/apps" "$destination/archboot-main/services"
+fi
 EOF
 chmod +x "$bootstrap_bin/mktemp" "$bootstrap_bin/curl" "$bootstrap_bin/tar"
 
 bootstrap_empty_dir="$ssh_test_home/bootstrap-empty"
 if bootstrap_empty_output=$(BOOTSTRAP_TEMP="$bootstrap_empty_dir" BOOTSTRAP_MODE=empty \
+    CURL_ARGS_FILE="$ssh_test_home/curl-empty.args" \
     PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
     error 'bootstrap aceitou tarball vazio'
     ((failures += 1))
@@ -277,15 +319,175 @@ fi
 
 bootstrap_incomplete_dir="$ssh_test_home/bootstrap-incomplete"
 if bootstrap_incomplete_output=$(BOOTSTRAP_TEMP="$bootstrap_incomplete_dir" BOOTSTRAP_MODE=incomplete \
+    CURL_ARGS_FILE="$ssh_test_home/curl-incomplete.args" \
     PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
     error 'bootstrap aceitou tarball sem estrutura modular'
     ((failures += 1))
-elif grep -Fq 'diretório lib/ não encontrado no tarball' <<<"$bootstrap_incomplete_output" \
+elif grep -Fq 'diretório lib/ ausente ou inválido no tarball' <<<"$bootstrap_incomplete_output" \
     && [[ ! -e $bootstrap_incomplete_dir ]]; then
     ok 'bootstrap rejeita estrutura incompleta e limpa temporário'
 else
     error 'bootstrap incompleto falhou sem mensagem ou limpeza esperada'
     ((failures += 1))
+fi
+
+bootstrap_multiple_dir="$ssh_test_home/bootstrap-multiple"
+if bootstrap_multiple_output=$(BOOTSTRAP_TEMP="$bootstrap_multiple_dir" BOOTSTRAP_MODE=multiple \
+    CURL_ARGS_FILE="$ssh_test_home/curl-multiple.args" \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou múltiplos diretórios raiz'
+    ((failures += 1))
+elif grep -Fq 'tarball deve conter exatamente um diretório raiz' <<<"$bootstrap_multiple_output" \
+    && [[ ! -e $bootstrap_multiple_dir ]]; then
+    ok 'bootstrap rejeita múltiplos candidatos e limpa temporário'
+else
+    error 'bootstrap múltiplo falhou sem mensagem ou limpeza esperada'
+    ((failures += 1))
+fi
+
+bootstrap_traversal_dir="$ssh_test_home/bootstrap-traversal"
+if bootstrap_traversal_output=$(BOOTSTRAP_TEMP="$bootstrap_traversal_dir" BOOTSTRAP_MODE=traversal \
+    CURL_ARGS_FILE="$ssh_test_home/curl-traversal.args" \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou path traversal no tarball'
+    ((failures += 1))
+elif grep -Fq 'tarball contém caminho inseguro' <<<"$bootstrap_traversal_output" \
+    && [[ ! -e $bootstrap_traversal_dir ]]; then
+    ok 'bootstrap rejeita path traversal e limpa temporário'
+else
+    error 'bootstrap traversal falhou sem mensagem ou limpeza esperada'
+    ((failures += 1))
+fi
+
+bootstrap_outside_dir="$ssh_test_home/bootstrap-outside"
+bootstrap_outside_target="$ssh_test_home/outside-target"
+if bootstrap_outside_output=$(BOOTSTRAP_TEMP="$bootstrap_outside_dir" BOOTSTRAP_MODE=outside \
+    BOOTSTRAP_OUTSIDE="$bootstrap_outside_target" CURL_ARGS_FILE="$ssh_test_home/curl-outside.args" \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou raiz extraída por symlink para fora do temporário'
+    ((failures += 1))
+elif grep -Fq 'estrutura extraída inválida' <<<"$bootstrap_outside_output" \
+    && [[ ! -e $bootstrap_outside_dir ]]; then
+    ok 'bootstrap rejeita candidato fora do temporário'
+else
+    error 'bootstrap externo falhou sem mensagem ou limpeza esperada'
+    ((failures += 1))
+fi
+
+bootstrap_valid_dir="$ssh_test_home/bootstrap-valid"
+curl_args="$ssh_test_home/curl-valid.args"
+if bootstrap_valid_output=$(BOOTSTRAP_TEMP="$bootstrap_valid_dir" BOOTSTRAP_MODE=valid \
+    CURL_ARGS_FILE="$curl_args" PATH="$bootstrap_bin:$PATH" \
+    bash -s -- --plan <install.sh 2>&1) \
+    && grep -Fq 'mock project loaded' <<<"$bootstrap_valid_output" \
+    && grep -Fxq -- '--retry' "$curl_args" \
+    && grep -Fxq -- '3' "$curl_args" \
+    && grep -Fxq -- '--connect-timeout' "$curl_args" \
+    && grep -Fxq -- '10' "$curl_args" \
+    && grep -Fxq -- '--max-time' "$curl_args" \
+    && grep -Fxq -- '120' "$curl_args" \
+    && [[ ! -e $bootstrap_valid_dir ]]; then
+    ok 'bootstrap válido usa retry/timeouts, reexecuta e limpa temporário'
+else
+    error 'bootstrap válido não respeitou download, execução ou cleanup esperados'
+    ((failures += 1))
+fi
+
+invalid_bootstrap_env=0
+for invalid_repo in \
+    'http://github.com/owner/repo' \
+    'https://example.com/owner/repo' \
+    'https://github.com/owner/repo;echo'; do
+    if ARCHBOOT_REPO=$invalid_repo BOOTSTRAP_MODE=valid \
+        BOOTSTRAP_TEMP="$ssh_test_home/bootstrap-invalid-repo" \
+        CURL_ARGS_FILE="$ssh_test_home/curl-invalid-repo.args" PATH="$bootstrap_bin:$PATH" \
+        bash -s -- --plan <install.sh >/dev/null 2>&1; then
+        error "bootstrap aceitou ARCHBOOT_REPO inválido: $invalid_repo"
+        ((failures += 1))
+        invalid_bootstrap_env=1
+    fi
+done
+
+for invalid_branch in '' 'bad branch' '../main' 'main;echo' 'main|cat' 'feature//test'; do
+    if ARCHBOOT_BRANCH=$invalid_branch BOOTSTRAP_MODE=valid \
+        BOOTSTRAP_TEMP="$ssh_test_home/bootstrap-invalid-branch" \
+        CURL_ARGS_FILE="$ssh_test_home/curl-invalid-branch.args" PATH="$bootstrap_bin:$PATH" \
+        bash -s -- --plan <install.sh >/dev/null 2>&1; then
+        error "bootstrap aceitou ARCHBOOT_BRANCH inválida: ${invalid_branch:-<vazia>}"
+        ((failures += 1))
+        invalid_bootstrap_env=1
+    fi
+done
+(( invalid_bootstrap_env )) || ok 'bootstrap rejeita repositórios e branches inválidos'
+
+local_curl_marker="$ssh_test_home/local-curl-called"
+cat >"$bootstrap_bin/curl" <<EOF
+#!/usr/bin/env bash
+touch "$local_curl_marker"
+exit 90
+EOF
+chmod +x "$bootstrap_bin/curl"
+if PATH="$bootstrap_bin:$PATH" bash install.sh --plan >/dev/null 2>&1 \
+    && [[ ! -e $local_curl_marker ]]; then
+    ok '--plan local não aciona bootstrap remoto'
+else
+    error '--plan local tentou usar curl/bootstrap remoto'
+    ((failures += 1))
+fi
+
+redaction_log="$ssh_test_home/redaction.log"
+if redaction_output=$(bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/run
+    DRY_RUN=0
+    VERBOSE=0
+    LOG_FILE=$1
+    github_token="gh""p_TESTTOKEN123"
+    fine_token="github_""pat_TESTTOKEN456"
+    slack_token="xox""b-123456-secret"
+    authorization="Authorization: ""Bearer $github_token"
+    private_begin="-----BEGIN OPENSSH PRIVATE ""KEY-----"
+    private_end="-----END OPENSSH PRIVATE ""KEY-----"
+    run_cmd redaction printf "%s\n" \
+        "$github_token" "$fine_token" "$slack_token" "$authorization" \
+        "$private_begin" private-material "$private_end"
+    DRY_RUN=1
+    dry_run_msg curl -H "$authorization" https://example.invalid
+' _ "$redaction_log" 2>&1) \
+    && grep -Fq '[REDACTED_GITHUB_TOKEN]' "$redaction_log" \
+    && grep -Fq '[REDACTED_SLACK_TOKEN]' "$redaction_log" \
+    && grep -Fq '[REDACTED PRIVATE KEY]' "$redaction_log" \
+    && grep -Fq '[REDACTED_GITHUB_TOKEN]' <<<"$redaction_output" \
+    && ! grep -Eq 'TESTTOKEN|private-material|123456-secret' "$redaction_log" \
+    && ! grep -Eq 'TESTTOKEN|123456-secret' <<<"$redaction_output"; then
+    ok 'logs e dry-run removem tokens, bearer e blocos de chave privada'
+else
+    error 'redaction de logs ou output falhou'
+    ((failures += 1))
+fi
+
+state_home="$ssh_test_home/state-home"
+if HOME="$ssh_test_home" XDG_STATE_HOME="$state_home" bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/env
+    state
+    [[ $(stat -c %a "$ARCHBOOT_STATE_DIR") == 700 ]]
+    [[ $(stat -c %a "$ARCHBOOT_LOG_DIR") == 700 ]]
+    [[ $(stat -c %a "$LOG_FILE") == 600 ]]
+'; then
+    ok 'diretórios e arquivos de log usam permissões restritas'
+else
+    error 'permissões de logs não são 700/600'
+    ((failures += 1))
+fi
+
+if grep -REn 'cat[[:space:]]+.*(SSH_PRIVATE_KEY|id_ed25519([^.]|$))' lib install.sh >/dev/null 2>&1; then
+    error 'código tenta imprimir conteúdo de chave SSH privada'
+    ((failures += 1))
+else
+    ok 'nenhuma chave SSH privada é lida com cat'
 fi
 
 ssh_normalize() {
@@ -811,6 +1013,8 @@ readme_tokens=(
     'bash install.sh --plan --verbose'
     'bash install.sh --yes'
     'ARCHBOOT_CI=1'
+    'Safer audit-first install'
+    'https://github.com/OWNER/REPO'
 )
 for token in "${readme_tokens[@]}"; do
     if ! grep -Fq "$token" README.md; then
@@ -843,6 +1047,10 @@ if (( docs_fail )); then
     ((failures += 1))
 else
     ok 'documentação alinhada com o domínio curto e a estrutura atual'
+fi
+if ! grep -Fq '## Unreleased' CHANGELOG.md; then
+    error 'CHANGELOG.md não contém seção Unreleased'
+    ((failures += 1))
 fi
 
 step 7 10 'validando GitHub Actions'
@@ -951,7 +1159,7 @@ else
 fi
 
 step 9 10 'procurando segredos óbvios'
-secret_regex='OPENAI_''API_KEY=|gh''p_|github_''pat_|s''k-|pass''word=|pass''wd=|PRIVATE ''KEY|BEGIN OPENSSH PRIVATE ''KEY|BEGIN RSA PRIVATE ''KEY'
+secret_regex='OPENAI_''API_KEY=|gh''p_[A-Za-z0-9_]{8,}|github_''pat_[A-Za-z0-9_]{8,}|xox''b-[A-Za-z0-9-]{8,}|Authorization:[[:space:]]+Bearer[[:space:]]+[A-Za-z0-9]|s''k-[A-Za-z0-9]{8,}|pass''word=|pass''wd=|BEGIN OPENSSH PRIVATE ''KEY|BEGIN RSA PRIVATE ''KEY'
 secret_found=0
 while IFS= read -r -d '' file; do
     if grep -EIn "$secret_regex" "$file" >/dev/null 2>&1; then

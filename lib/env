@@ -27,7 +27,8 @@ sudo() {
 
 net() {
     command_exists curl || die 'curl não está instalado'
-    curl -fsSI --connect-timeout 8 https://archlinux.org/ >/dev/null \
+    curl -fsSLI --retry 2 --connect-timeout 8 --max-time 20 \
+        https://archlinux.org/ >/dev/null \
         || die 'sem acesso básico à internet'
 }
 
@@ -36,8 +37,10 @@ state() {
     ARCHBOOT_STATE_DIR="$state_home/archboot"
     ARCHBOOT_LOG_DIR="$ARCHBOOT_STATE_DIR/logs"
     mkdir -p "$ARCHBOOT_LOG_DIR"
+    chmod 700 "$ARCHBOOT_STATE_DIR" "$ARCHBOOT_LOG_DIR"
     LOG_FILE="$ARCHBOOT_LOG_DIR/$(date '+%Y%m%d-%H%M%S')-$$.log"
     : >"$LOG_FILE"
+    chmod 600 "$LOG_FILE"
     export ARCHBOOT_STATE_DIR ARCHBOOT_LOG_DIR LOG_FILE
 }
 

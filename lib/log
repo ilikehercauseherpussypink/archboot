@@ -1,5 +1,30 @@
 #!/usr/bin/env bash
 
+redact_sensitive() {
+    sed -E \
+        -e 's/-----BEGIN\\ [A-Z0-9\\ ]*PRIVATE\\ KEY-----.*-----END\\ [A-Z0-9\\ ]*PRIVATE\\ KEY-----/[REDACTED PRIVATE KEY]/g' \
+        -e 's/gh[pousr]_[A-Za-z0-9_]+/[REDACTED_GITHUB_TOKEN]/g' \
+        -e 's/github_pat_[A-Za-z0-9_]+/[REDACTED_GITHUB_TOKEN]/g' \
+        -e 's/xoxb-[A-Za-z0-9-]+/[REDACTED_SLACK_TOKEN]/g' \
+        -e 's/(Authorization:[[:space:]]*Bearer)[[:space:]]+[^[:space:]]+/\1 [REDACTED]/Ig' \
+        | awk '
+            /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/ {
+                print "[REDACTED PRIVATE KEY]"
+                if ($0 ~ /-----END [A-Z0-9 ]*PRIVATE KEY-----/) {
+                    next
+                }
+                private_key = 1
+                next
+            }
+            private_key && /-----END [A-Z0-9 ]*PRIVATE KEY-----/ {
+                private_key = 0
+                next
+            }
+            private_key { next }
+            { print }
+        '
+}
+
 banner() {
     printf '\narchboot\n'
     printf 'Bootstrap modular para Arch Linux\n\n'
