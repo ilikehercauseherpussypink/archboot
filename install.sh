@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ARCHBOOT_VERSION='0.1.0'
+ARCHBOOT_VERSION='0.1.1'
 ARCHBOOT_REPO=${ARCHBOOT_REPO:-https://github.com/ilikehercauseherpussypink/archboot}
 ARCHBOOT_BRANCH=${ARCHBOOT_BRANCH:-main}
 

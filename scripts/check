@@ -186,10 +186,10 @@ step 5 10 'validando controles do instalador'
 controls_fail=0
 version_output=$(bash install.sh --version 2>&1 || true)
 if piped_version_output=$(set -o pipefail; sed -n p install.sh | bash -s -- --version) \
-    && [[ $version_output == 'archboot 0.1.0' ]] \
-    && [[ $piped_version_output == 'archboot 0.1.0' ]] \
-    && grep -Fq '## 0.1.0' CHANGELOG.md; then
-    ok 'versão 0.1.0 consistente'
+    && [[ $version_output == 'archboot 0.1.1' ]] \
+    && [[ $piped_version_output == 'archboot 0.1.1' ]] \
+    && grep -Fq '## v0.1.1' CHANGELOG.md; then
+    ok 'versão 0.1.1 consistente'
 else
     error 'install.sh --version ou CHANGELOG está inconsistente'
     controls_fail=1
@@ -208,7 +208,7 @@ for flag in "${help_flags[@]}"; do
 done
 
 if plan_output=$(bash install.sh --plan 2>&1) \
-    && grep -Fq 'archboot 0.1.0' <<<"$plan_output" \
+    && grep -Fq 'archboot 0.1.1' <<<"$plan_output" \
     && grep -Fq 'pacman: 11 pacotes' <<<"$plan_output" \
     && grep -Fq 'flatpak: 5 apps' <<<"$plan_output" \
     && grep -Fq 'aur: 3 pacotes' <<<"$plan_output" \

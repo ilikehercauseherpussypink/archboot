@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.1
+
+* Release tag aligned with the current published state.
+* Kept the published v0.1.0 tag intact without rewriting history.
+* Includes CI, installer control flags, plan/version modes, `ARCHBOOT_CI`, updated documentation and public checks through `shelies.org`.
+
 ## 0.1.0
 
 * Added modular Arch Linux bootstrap with clean output and audit-first execution.
