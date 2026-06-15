@@ -38,6 +38,7 @@ pacman_install() {
             PACMAN_INSTALLED+=("$package")
         else
             error "pacote falhou: $package"
+            info "teste: sudo pacman -S --needed $package"
             info "log: $LOG_FILE"
             FAILURES+=("pacman:$package")
         fi

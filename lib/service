@@ -105,6 +105,11 @@ service_enable() {
     fi
 
     error "serviço falhou: $service"
+    if [[ $scope == system ]]; then
+        info "teste: systemctl status $service"
+    else
+        info "teste: systemctl --user status $service"
+    fi
     info "log: $LOG_FILE"
     FAILURES+=("service:$scope:$service")
     return 1

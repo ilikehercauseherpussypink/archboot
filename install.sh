@@ -390,6 +390,23 @@ has_failure() {
     return 1
 }
 
+count_failures() {
+    local prefix=$1 failure count=0
+    for failure in "${FAILURES[@]}"; do
+        [[ $failure == "$prefix"* ]] && ((count += 1))
+    done
+    printf '%s' "$count"
+}
+
+summary_counts() {
+    local label=$1 action_count=$2 action_label=$3 skipped_count=$4 failure_prefix=$5
+    local failed_count line
+    failed_count=$(count_failures "$failure_prefix")
+    line="$label: $action_count $action_label, $skipped_count pulados"
+    (( failed_count > 0 )) && line+=", $failed_count falhas"
+    info "$line"
+}
+
 show_summary() {
     local codex_command='' expected_codex="$HOME/.codex/bin/codex"
     local failure_count=${#FAILURES[@]}
@@ -412,15 +429,17 @@ show_summary() {
     fi
 
     if (( DRY_RUN )); then
-        info "pacman: ${#PACMAN_PLANNED[@]} planejados, ${#PACMAN_SKIPPED[@]} pulados"
-        info "flatpak: ${#FLATPAK_PLANNED[@]} planejados, ${#FLATPAK_SKIPPED[@]} pulados"
-        info "aur: ${#AUR_PLANNED[@]} planejados, ${#AUR_SKIPPED[@]} pulados"
-        info "serviços: ${#SERVICES_PLANNED[@]} planejados, ${#SERVICES_ALREADY[@]} ativos, ${#SERVICES_SKIPPED[@]} pulados"
+        summary_counts pacman "${#PACMAN_PLANNED[@]}" planejados "${#PACMAN_SKIPPED[@]}" 'pacman:'
+        summary_counts flatpak "${#FLATPAK_PLANNED[@]}" planejados "${#FLATPAK_SKIPPED[@]}" 'flatpak:'
+        summary_counts aur "${#AUR_PLANNED[@]}" planejados "${#AUR_SKIPPED[@]}" 'aur:'
+        summary_counts serviços "${#SERVICES_PLANNED[@]}" planejados \
+            "$((${#SERVICES_ALREADY[@]} + ${#SERVICES_SKIPPED[@]}))" 'service:'
     else
-        info "pacman: ${#PACMAN_INSTALLED[@]} instalados, ${#PACMAN_SKIPPED[@]} pulados"
-        info "flatpak: ${#FLATPAK_INSTALLED[@]} instalados, ${#FLATPAK_SKIPPED[@]} pulados"
-        info "aur: ${#AUR_INSTALLED[@]} instalados, ${#AUR_SKIPPED[@]} pulados"
-        info "serviços: $((${#SERVICES_ACTIVATED[@]} + ${#SERVICES_ALREADY[@]})) ativos, ${#SERVICES_SKIPPED[@]} pulados"
+        summary_counts pacman "${#PACMAN_INSTALLED[@]}" instalados "${#PACMAN_SKIPPED[@]}" 'pacman:'
+        summary_counts flatpak "${#FLATPAK_INSTALLED[@]}" instalados "${#FLATPAK_SKIPPED[@]}" 'flatpak:'
+        summary_counts aur "${#AUR_INSTALLED[@]}" instalados "${#AUR_SKIPPED[@]}" 'aur:'
+        summary_counts serviços "$((${#SERVICES_ACTIVATED[@]} + ${#SERVICES_ALREADY[@]}))" ativos \
+            "${#SERVICES_SKIPPED[@]}" 'service:'
     fi
 
     if (( SKIP_GITHUB )); then
@@ -440,8 +459,8 @@ show_summary() {
 
     if (( failure_count > 0 )); then
         summary_line 'falhas' "${FAILURES[@]}"
-        info "veja log: $LOG_FILE"
-    else
+        [[ $LOG_FILE != /dev/null ]] && info "veja log: $LOG_FILE"
+    elif [[ $LOG_FILE != /dev/null ]]; then
         info "log: $LOG_FILE"
     fi
 

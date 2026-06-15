@@ -24,6 +24,7 @@ _github_key_material() {
 _github_gh_ready() {
     if ! command_exists gh; then
         warn 'GitHub CLI indisponível; cadastro automático não será usado'
+        info 'para autenticar depois: gh auth login'
         return 1
     fi
     if run_cmd 'gh auth status' gh auth status; then
@@ -41,6 +42,7 @@ _github_gh_ready() {
         return 0
     fi
     warn 'autenticação GitHub CLI não concluída'
+    info 'tente novamente: gh auth login'
     FAILURES+=('gh:auth')
     return 1
 }
@@ -254,6 +256,7 @@ github_manage_ssh_key() {
 configure_gh() {
     if ! command_exists gh; then
         warn 'GitHub CLI indisponível; autenticação pulada'
+        info 'para autenticar depois: gh auth login'
         return 1
     fi
     if (( DRY_RUN )); then
@@ -276,6 +279,7 @@ configure_gh() {
         ok 'GitHub CLI autenticado'
     else
         warn 'autenticação GitHub CLI não concluída'
+        info 'tente novamente: gh auth login'
         FAILURES+=('gh:auth')
         return 1
     fi

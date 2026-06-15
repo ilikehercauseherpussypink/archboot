@@ -24,6 +24,7 @@ flatpak_remote() {
         ok 'flathub configurado'
     else
         error 'falha ao configurar flathub'
+        info 'teste: flatpak remotes'
         FAILURES+=('flatpak:flathub')
         return 1
     fi
@@ -42,6 +43,7 @@ flatpak_setup() {
     if ! command_exists flatpak && (( ! DRY_RUN )); then
         FLATPAK_AVAILABLE=0
         warn 'flatpak indisponível; fonte Flatpak será pulada'
+        info 'teste: flatpak --version'
         return 1
     fi
     if command_exists flatpak; then
@@ -79,6 +81,7 @@ flatpak_install() {
             FLATPAK_INSTALLED+=("$app")
         else
             error "pacote falhou: $app"
+            info "teste: flatpak install flathub $app"
             info "log: $LOG_FILE"
             FAILURES+=("flatpak:$app")
         fi

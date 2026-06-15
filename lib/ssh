@@ -182,6 +182,7 @@ test_github_ssh() {
     # shellcheck disable=SC2034
     SSH_GITHUB_RESULT="falhou (código $status)"
     warn 'teste SSH com GitHub não confirmou autenticação'
+    info 'teste manual: ssh -T git@github.com'
     info "log: $LOG_FILE"
     return 1
 }

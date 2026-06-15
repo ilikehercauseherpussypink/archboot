@@ -37,6 +37,7 @@ app_lines() {
 step 1 10 'validando estrutura'
 required=(
     install.sh README.md CHANGELOG.md LICENSE .gitignore
+    docs/TROUBLESHOOTING.md
     .github/workflows/check.yml
     scripts/check scripts/github
     cloudflare/worker.js cloudflare/wrangler.toml.example cloudflare/README.md
@@ -651,6 +652,9 @@ if ci_dry_output=$(ARCHBOOT_CI=1 bash install.sh "${ci_args[@]}" 2>&1) \
     && grep -Fq '[skip] Codex desativado por flag' <<<"$ci_dry_output" \
     && grep -Fq '[skip] SSH desativado por flag' <<<"$ci_dry_output" \
     && grep -Fq '[skip] GitHub desativado por flag' <<<"$ci_dry_output" \
+    && grep -Fq '[info] pacman: 0 planejados, 0 pulados' <<<"$ci_dry_output" \
+    && grep -Fq '[info] desativados por flag:' <<<"$ci_dry_output" \
+    && ! grep -Fq 'log: /dev/null' <<<"$ci_dry_output" \
     && ! grep -Eq '\[dry-run\].*(pacman -S|flatpak (install|remote-add)|yay -S|paru -S|systemctl .*enable|npm install|gh (auth|ssh-key)|ssh-keygen)' <<<"$ci_dry_output"; then
     ok 'CI dry-run respeita flags sem executar fontes desativadas'
 else
@@ -684,6 +688,18 @@ if ARCHBOOT_CI=1 bash install.sh >/dev/null 2>&1; then
     controls_fail=1
 else
     ok 'ARCHBOOT_CI=1 bloqueia execução mutável'
+fi
+
+# A expressão é intencionalmente literal para validar o código-fonte.
+# shellcheck disable=SC2016
+if grep -Fq 'if (( failure_count == 0 )); then' install.sh \
+    && grep -Fq 'warn "concluído com $failure_count falha(s)"' install.sh \
+    && grep -Fq 'summary_counts pacman' install.sh \
+    && grep -Fq 'summary_counts serviços' install.sh; then
+    ok 'resumo distingue sucesso, falhas e contagens por fonte'
+else
+    error 'resumo final não preserva diagnóstico e contagens esperados'
+    controls_fail=1
 fi
 
 if bash -c '
@@ -1015,6 +1031,7 @@ readme_tokens=(
     'ARCHBOOT_CI=1'
     'Safer audit-first install'
     'https://github.com/OWNER/REPO'
+    'docs/TROUBLESHOOTING.md'
 )
 for token in "${readme_tokens[@]}"; do
     if ! grep -Fq "$token" README.md; then
@@ -1032,12 +1049,25 @@ for token in "${cloudflare_readme_tokens[@]}"; do
         docs_fail=1
     fi
 done
+troubleshooting_tokens=(
+    'https://shelies.org/health'
+    'pacman lock'
+    'gh auth status'
+    'ssh -T git@github.com'
+    'tail -n 120 ~/.local/state/archboot/logs/ARQUIVO.log'
+)
+for token in "${troubleshooting_tokens[@]}"; do
+    if ! grep -Fiq "$token" docs/TROUBLESHOOTING.md; then
+        error "docs/TROUBLESHOOTING.md não contém: $token"
+        docs_fail=1
+    fi
+done
 first_readme_curl=$(grep -m1 'curl -fsSL' README.md || true)
 if [[ $first_readme_curl != 'curl -fsSL https://shelies.org | bash' ]]; then
     error 'README.md não prioriza o domínio curto no quick start'
     docs_fail=1
 fi
-for markdown_file in README.md cloudflare/README.md; do
+for markdown_file in README.md cloudflare/README.md docs/TROUBLESHOOTING.md; do
     if ! awk '/^```/ { open = !open } END { exit open ? 1 : 0 }' "$markdown_file"; then
         error "$markdown_file contém bloco de código aberto"
         docs_fail=1

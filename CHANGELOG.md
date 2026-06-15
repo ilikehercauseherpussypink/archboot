@@ -8,6 +8,7 @@
 * Strengthened argument and bootstrap validation.
 * Hardened remote repository, branch, tarball and extraction validation.
 * Added log redaction and restrictive log permissions.
+* Added focused troubleshooting documentation and clearer failure diagnostics.
 
 ## v0.1.1
 

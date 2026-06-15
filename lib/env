@@ -16,12 +16,12 @@ root() {
 }
 
 sudo() {
-    command_exists sudo || die 'sudo não está instalado'
+    command_exists sudo || die 'sudo não está instalado; instale sudo e configure seu usuário'
     if (( DRY_RUN )); then
         return 0
     fi
     if ! command sudo -v; then
-        die 'sudo indisponível para o usuário atual'
+        die 'sudo negado; confirme que seu usuário tem permissão administrativa'
     fi
 }
 
@@ -29,7 +29,7 @@ net() {
     command_exists curl || die 'curl não está instalado'
     curl -fsSLI --retry 2 --connect-timeout 8 --max-time 20 \
         https://archlinux.org/ >/dev/null \
-        || die 'sem acesso básico à internet'
+        || die 'internet indisponível; teste: curl -I https://archlinux.org'
 }
 
 state() {
@@ -48,8 +48,8 @@ lock() {
     PACMAN_BLOCKED=0
     if [[ -e /var/lib/pacman/db.lck ]]; then
         PACMAN_BLOCKED=1
-        warn 'lock do pacman detectado; pacman e AUR serão pulados'
-        info 'não remova o lock sem confirmar que nenhum gerenciador de pacotes está ativo'
+        warn 'pacman lock ativo; pacman e AUR serão pulados'
+        info 'feche pacman/paru/yay em execução; não remova o lock sem verificar o processo'
     else
         ok 'pacman sem lock'
     fi

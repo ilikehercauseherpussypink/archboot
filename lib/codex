@@ -17,6 +17,7 @@ configure_prefix() {
     fi
     if ! command_exists npm; then
         warn 'npm indisponível; Codex será pulado'
+        info 'teste após instalar npm: npm --version'
         FAILURES+=('codex:npm-indisponivel')
         return 1
     fi
@@ -46,6 +47,7 @@ install_codex() {
         ok 'Codex CLI instalado'
     else
         error 'falha ao instalar Codex CLI'
+        info 'teste: npm install -g @openai/codex'
         info "log: $LOG_FILE"
         FAILURES+=('codex:instalacao')
         return 1

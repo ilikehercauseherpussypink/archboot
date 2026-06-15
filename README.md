@@ -263,6 +263,10 @@ ARCHBOOT_CI=1 bash install.sh --dry-run --no-packages --no-services --no-ssh --n
 
 `ARCHBOOT_CI=1` não ignora segurança em uma instalação real: sem `--dry-run` ou `--plan`, o instalador aborta.
 
+## Troubleshooting
+
+Consulte [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) para diagnóstico curto de pacman lock, rede, sudo, Flatpak, AUR, Mullvad, GitHub, SSH, Codex, domínio e logs.
+
 ## Publish
 
 ```bash

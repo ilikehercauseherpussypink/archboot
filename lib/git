@@ -5,6 +5,7 @@ configure_git() {
 
     command_exists git || {
         warn 'git indisponível; configuração Git pulada'
+        info 'teste após instalar Git: git --version'
         FAILURES+=('git:indisponivel')
         return 1
     }
