@@ -15,6 +15,9 @@ initial_banner() {
 EARLY_PLAN=0
 for argument in "$@"; do
     if [[ $argument == --version ]]; then
+        if [[ -z ${BASH_SOURCE[0]:-} && ! -t 0 ]]; then
+            while IFS= read -r _; do :; done
+        fi
         printf 'archboot %s\n' "$ARCHBOOT_VERSION"
         exit 0
     fi
