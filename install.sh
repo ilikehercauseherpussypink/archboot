@@ -57,7 +57,8 @@ bootstrap_project() {
     chmod 700 "$temp_dir"
     archive="$temp_dir/archboot.tar.gz"
 
-    # shellcheck disable=SC2329
+    # Invocada indiretamente pelo trap.
+    # shellcheck disable=SC2317,SC2329
     cleanup_bootstrap() {
         rm -rf -- "$temp_dir"
     }
