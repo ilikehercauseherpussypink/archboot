@@ -62,7 +62,9 @@ _backup_ssh_key() {
         return 1
     fi
     if [[ -e $public_key ]] && ! mv -- "$public_key" "$backup_public"; then
-        [[ -e $backup_private && ! -e $private_key ]] && mv -- "$backup_private" "$private_key" || true
+        if [[ -e $backup_private && ! -e $private_key ]]; then
+            mv -- "$backup_private" "$private_key" || true
+        fi
         warn 'não foi possível criar backup da chave SSH pública'
         return 1
     fi
