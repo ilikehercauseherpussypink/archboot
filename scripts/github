@@ -10,30 +10,14 @@ description=''
 
 ok()    { printf '> [ok] %s\n' "$*"; }
 info()  { printf '> [info] %s\n' "$*"; }
+warn()  { printf '> [warn] %s\n' "$*"; }
 error() { printf '> [error] %s\n' "$*" >&2; }
 step()  { printf '\n> Etapa %s/%s: %s\n' "$1" "$2" "$3"; }
 die()   { error "$*"; exit 1; }
 
-yesno() {
-    local question=$1 default=${2:-n} answer hint='s/N'
-    [[ $default == s ]] && hint='S/n'
-    while true; do
-        read -r -p "> [ask] $question [$hint] " answer || answer=''
-        answer=${answer,,}
-        [[ -z $answer ]] && answer=$default
-        case $answer in
-            s|sim|y|yes) return 0 ;;
-            n|nao|não|no) return 1 ;;
-            *) error 'responda com s ou n' ;;
-        esac
-    done
-}
-
-prompt() {
-    local variable=$1 question=$2 default=${3:-} answer
-    read -r -p "> [ask] $question${default:+ [$default]}: " answer || answer=''
-    printf -v "$variable" '%s' "${answer:-$default}"
-}
+ASK_PROMPT_PREFIX='> [ask]'
+# shellcheck source=lib/ask
+source "$ROOT/lib/ask"
 
 step 1 6 'validando ferramentas'
 command -v git >/dev/null 2>&1 || die 'git não está instalado'

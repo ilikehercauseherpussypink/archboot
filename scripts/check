@@ -933,32 +933,102 @@ else
 fi
 
 ask_prompt_test() {
-    local input=$1 expected=$2
-    printf '%b' "$input" | bash -c '
-        set -Eeuo pipefail
-        source lib/log
-        source lib/ask
-        is_interactive() { return 0; }
-        yesno "teste" n
-    ' >/dev/null 2>&1
-    [[ $? == "$expected" ]]
+    local input=$1 expected=$2 command='' output='' status=0
+
+    printf -v command 'set -Eeuo pipefail; source %q; source %q; yesno %q n' \
+        "$ROOT/lib/log" "$ROOT/lib/ask" 'teste'
+    if output=$(printf '%b' "$input" | script -qec "$command" /dev/null 2>&1); then
+        status=0
+    else
+        status=$?
+    fi
+    [[ $status == "$expected" ]] \
+        && grep -Fq '> [?] teste [s/N]' <<<"$output"
 }
-if ask_prompt_test '\n' 1 \
+
+ask_prompt_value_test() {
+    local command='' output=''
+
+    # $value deve ser expandido pelo shell dentro do pseudo-terminal.
+    # shellcheck disable=SC2016
+    printf -v command 'set -Eeuo pipefail; source %q; source %q; prompt value %q %q; [[ $value == %q ]]' \
+        "$ROOT/lib/log" "$ROOT/lib/ask" 'título' 'person' 'personal'
+    output=$(printf 'personal\n' | script -qec "$command" /dev/null 2>&1) \
+        && grep -Fq '> [?] título [person]:' <<<"$output"
+}
+
+if command -v script >/dev/null 2>&1 \
+    && ask_prompt_test '\n' 1 \
     && ask_prompt_test 'n\n' 1 \
     && ask_prompt_test 'N\n' 1 \
     && ask_prompt_test 's\n' 0 \
     && ask_prompt_test 'S\n' 0 \
     && ask_prompt_test 'inválido\ns\n' 0 \
-    && { bash -c '
+    && ask_prompt_value_test; then
+    ok 'prompts usam /dev/tty mesmo quando stdin vem de pipe'
+elif ! command -v script >/dev/null 2>&1; then
+    skip 'teste de pseudo-terminal indisponível (script ausente)'
+else
+    error 'prompt s/N não leu /dev/tty ou não preservou respostas esperadas'
+    controls_fail=1
+fi
+
+if command -v setsid >/dev/null 2>&1 \
+    && ! setsid bash -c '
         set -Eeuo pipefail
         source lib/log
         source lib/ask
-        is_interactive() { return 0; }
-        yesno "teste" n
-    ' </dev/null >/dev/null 2>&1; [[ $? == 1 ]]; }; then
-    ok 'prompts s/N tratam enter, maiúsculas, inválidos e stdin fechado'
+        yesno "teste sem tty" n
+    ' </dev/null >/dev/null 2>&1; then
+    ok 'prompts sem /dev/tty usam default seguro sem travar'
+elif ! command -v setsid >/dev/null 2>&1; then
+    skip 'teste sem terminal indisponível (setsid ausente)'
 else
-    error 'prompt s/N não preserva o default seguro'
+    error 'prompt sem /dev/tty não retornou o default seguro'
+    controls_fail=1
+fi
+
+if bash -c '
+    set -Eeuo pipefail
+    source lib/ask
+    _ask_read_tty() { exit 99; }
+    ASSUME_YES=1
+    if yesno "teste" n; then exit 1; fi
+    value=unexpected
+    prompt value "teste" default
+    [[ $value == default ]]
+    unset ASSUME_YES
+    DRY_RUN=1
+    if yesno "teste" n; then exit 1; fi
+    if ask_reconfigure "teste"; then exit 1; fi
+    value=unexpected
+    prompt value "teste" default
+    [[ $value == default ]]
+    DRY_RUN=0
+    PLAN_ONLY=1
+    if yesno "teste" n; then exit 1; fi
+    if ask_reconfigure "teste"; then exit 1; fi
+    PLAN_ONLY=0
+    DOCTOR_ONLY=1
+    if yesno "teste" n; then exit 1; fi
+    if ask_reconfigure "teste"; then exit 1; fi
+    DOCTOR_ONLY=0
+    CI_MODE=1
+    if yesno "teste" n; then exit 1; fi
+    if ask_reconfigure "teste"; then exit 1; fi
+' >/dev/null 2>&1; then
+    ok 'dry-run, --yes, --plan, --doctor e CI não leem prompts'
+else
+    error 'modo não interativo tentou ler /dev/tty'
+    controls_fail=1
+fi
+
+if pipe_dry_output=$(printf '\n' | timeout 15 bash install.sh --dry-run --no-packages \
+    --no-services --no-codex --no-git --no-ssh --no-github 2>&1) \
+    && ! grep -Fq '> [?]' <<<"$pipe_dry_output"; then
+    ok 'stdin em pipe não trava o dry-run'
+else
+    error 'dry-run com stdin em pipe travou ou pediu input'
     controls_fail=1
 fi
 

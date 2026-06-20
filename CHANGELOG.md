@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+* Fixed confirmation prompts when running through `curl | bash` by reading from `/dev/tty`.
 * Added `--doctor` for quick local diagnostics.
 * Kept the personal fast main-based installer flow.
 * Added confirmation prompts before reconfiguring existing Git, SSH, GitHub, Codex and service state.
