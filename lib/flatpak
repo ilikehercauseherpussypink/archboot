@@ -3,24 +3,47 @@
 declare -ag FLATPAK_INSTALLED=() FLATPAK_SKIPPED=()
 declare -ag FLATPAK_PLANNED=() FLATPAK_ALREADY=()
 FLATPAK_AVAILABLE=1
+FLATHUB_REPO_URL='https://dl.flathub.org/repo/flathub.flatpakrepo'
+FLATHUB_REMOTE_URL='https://dl.flathub.org/repo/'
 
 flatpak_missing() {
     ! flatpak list --app --columns=application 2>/dev/null | grep -Fxq "$1"
 }
 
 flatpak_remote() {
+    local remote_url=''
     if flatpak remotes --columns=name 2>/dev/null | grep -Fxq flathub; then
-        skip 'flathub já configurado'
-        return 0
+        remote_url=$(flatpak remotes --show-details --columns=name,url 2>/dev/null \
+            | awk -F '\t' '$1 == "flathub" { print $3; exit }')
+        if [[ -z $remote_url || $remote_url == "$FLATHUB_REMOTE_URL" ]]; then
+            skip 'flathub já configurado'
+            return 0
+        fi
+        if ! ask_reconfigure "flathub já existe com configuração diferente ($remote_url)" \
+            'flathub já existe com configuração diferente. deseja corrigir?'; then
+            skip 'configuração atual do flathub mantida'
+            return 0
+        fi
+        if (( DRY_RUN )); then
+            dry_run_msg flatpak remote-modify --url "$FLATHUB_REMOTE_URL" flathub
+            return 0
+        fi
+        if run_cmd 'corrigir flathub' flatpak remote-modify --url "$FLATHUB_REMOTE_URL" flathub; then
+            ok 'flathub corrigido'
+            return 0
+        fi
+        error 'falha ao corrigir flathub'
+        FAILURES+=('flatpak:flathub')
+        return 1
     fi
     if (( DRY_RUN )); then
         dry_run_msg flatpak remote-add --if-not-exists flathub \
-            https://dl.flathub.org/repo/flathub.flatpakrepo
+            "$FLATHUB_REPO_URL"
         printf '> [dry-run] configuraria o remote flathub\n'
         return 0
     fi
     if run_cmd 'configurar flathub' flatpak remote-add --if-not-exists flathub \
-        https://dl.flathub.org/repo/flathub.flatpakrepo; then
+        "$FLATHUB_REPO_URL"; then
         ok 'flathub configurado'
     else
         error 'falha ao configurar flathub'

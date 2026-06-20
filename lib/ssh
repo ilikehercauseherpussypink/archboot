@@ -4,6 +4,8 @@ SSH_PRIVATE_KEY=''
 SSH_PUBLIC_KEY=''
 SSH_CLIPBOARD='não'
 SSH_GITHUB_RESULT='não testado'
+SSH_KEY_WAS_EXISTING=0
+SSH_KEY_CREATED=0
 # Consumida pelo orquestrador após source deste módulo.
 # shellcheck disable=SC2034
 GITHUB_KEYS_URL='https://github.com/settings/keys'
@@ -47,6 +49,24 @@ _set_ssh_permissions() {
     chmod 644 "$public_key"
 }
 
+_backup_ssh_key() {
+    local private_key=$1 public_key=$2 timestamp backup_private backup_public
+    timestamp=$(date '+%Y%m%d-%H%M%S')-$$
+    backup_private="$private_key.bak.$timestamp"
+    backup_public="$public_key.bak.$timestamp"
+
+    if [[ -e $private_key ]] && ! mv -- "$private_key" "$backup_private"; then
+        warn 'não foi possível criar backup da chave SSH privada'
+        return 1
+    fi
+    if [[ -e $public_key ]] && ! mv -- "$public_key" "$backup_public"; then
+        warn 'não foi possível criar backup da chave SSH pública'
+        return 1
+    fi
+    info "backup SSH criado: $backup_private"
+    [[ -e $backup_public ]] && info "backup SSH criado: $backup_public"
+}
+
 _start_ssh_agent() {
     local agent_output sock pid
     [[ -n ${SSH_AUTH_SOCK:-} ]] && return 0
@@ -59,7 +79,8 @@ _start_ssh_agent() {
 }
 
 configure_ssh() {
-    local default_key="$HOME/.ssh/id_ed25519" alternate email normalized
+    local default_key="$HOME/.ssh/id_ed25519" email normalized
+    local private_exists=0 public_exists=0 regenerate=0
 
     command_exists ssh-keygen || {
         warn 'ssh-keygen indisponível; configuração SSH pulada'
@@ -67,27 +88,36 @@ configure_ssh() {
         return 1
     }
 
-    if [[ -f $default_key ]]; then
-        if yesno 'Reutilizar ~/.ssh/id_ed25519?' s; then
-            SSH_PRIVATE_KEY=$default_key
+    [[ -e $default_key ]] && private_exists=1
+    [[ -e $default_key.pub ]] && public_exists=1
+    SSH_PRIVATE_KEY=$default_key
+    SSH_PUBLIC_KEY="$default_key.pub"
+
+    if (( private_exists && public_exists )); then
+        # Consumida pelo módulo GitHub após source deste módulo.
+        # shellcheck disable=SC2034
+        SSH_KEY_WAS_EXISTING=1
+        info "chave SSH local encontrada: $SSH_PUBLIC_KEY"
+        if ! ask_reconfigure 'chave SSH local já existe' \
+            'chave SSH local já existe. deseja gerar uma nova?'; then
+            skip 'chave SSH local mantida'
         else
-            prompt alternate 'nome da nova chave' "$HOME/.ssh/id_ed25519_github"
-            [[ -n $alternate ]] || {
-                warn 'caminho vazio; configuração SSH pulada'
-                return 1
-            }
-            if ! normalized=$(_normalize_ssh_key_path "$alternate"); then
-                warn 'nome de chave inválido; configuração SSH pulada'
-                return 1
-            fi
-            SSH_PRIVATE_KEY=$normalized
+            regenerate=1
         fi
+    elif (( private_exists || public_exists )); then
+        warn 'chave SSH local está incompleta'
+        if ! ask_reconfigure 'chave SSH local está incompleta' \
+            'chave SSH local está incompleta. deseja reparar/refazer?'; then
+            warn 'chave SSH local incompleta mantida; SSH será pulado'
+            return 1
+        fi
+        regenerate=1
     else
         if ! yesno 'Criar uma chave SSH ed25519 para GitHub?' n; then
             skip 'criação de chave SSH recusada'
             return 1
         fi
-        SSH_PRIVATE_KEY=$default_key
+        SSH_KEY_CREATED=1
     fi
 
     if ! normalized=$(_normalize_ssh_key_path "$SSH_PRIVATE_KEY"); then
@@ -97,11 +127,12 @@ configure_ssh() {
     SSH_PRIVATE_KEY=$normalized
     SSH_PUBLIC_KEY="$SSH_PRIVATE_KEY.pub"
     (( VERBOSE )) && info "caminho SSH final: $SSH_PRIVATE_KEY"
-    if [[ ! -f $SSH_PRIVATE_KEY ]]; then
-        if [[ -e $SSH_PRIVATE_KEY || -e $SSH_PUBLIC_KEY ]]; then
-            warn "o caminho já existe e não será sobrescrito: $SSH_PRIVATE_KEY"
-            return 1
-        fi
+    if (( regenerate )); then
+        _backup_ssh_key "$SSH_PRIVATE_KEY" "$SSH_PUBLIC_KEY" || return 1
+        SSH_KEY_CREATED=1
+    fi
+
+    if (( SSH_KEY_CREATED )); then
         email=${GIT_EMAIL:-$(git config --global --get user.email 2>/dev/null || true)}
         email=${email:-$USER@$(hostname)}
         if (( DRY_RUN )); then
@@ -116,12 +147,9 @@ configure_ssh() {
             _set_ssh_permissions "$SSH_PRIVATE_KEY" "$SSH_PUBLIC_KEY"
             ok "chave SSH local pronta: $SSH_PUBLIC_KEY"
         fi
-    elif [[ ! -f $SSH_PUBLIC_KEY ]]; then
+    elif [[ ! -f $SSH_PRIVATE_KEY || ! -f $SSH_PUBLIC_KEY ]]; then
         warn "chave pública ausente: $SSH_PUBLIC_KEY"
         return 1
-    else
-        _set_ssh_permissions "$SSH_PRIVATE_KEY" "$SSH_PUBLIC_KEY"
-        ok "chave SSH local pronta: $SSH_PUBLIC_KEY"
     fi
 
     if (( ! DRY_RUN )); then

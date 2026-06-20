@@ -7,27 +7,42 @@ CODEX_PATH_LINE='export PATH="$HOME/.codex/bin:$PATH"'
 # shellcheck disable=SC2016
 CODEX_FISH_LINE='fish_add_path "$HOME/.codex/bin"'
 declare -ag CODEX_PATH_ALREADY=()
+declare -ag CODEX_PATH_SKIPPED=()
 CODEX_PATH_CHANGED=0
+CODEX_PREFIX_READY=0
 
 configure_prefix() {
-    if (( DRY_RUN )); then
-        dry_run_msg mkdir -p "$CODEX_PREFIX"
-    else
-        mkdir -p "$CODEX_PREFIX"
-    fi
+    local current_prefix=''
     if ! command_exists npm; then
         warn 'npm indisponível; Codex será pulado'
         info 'teste após instalar npm: npm --version'
         FAILURES+=('codex:npm-indisponivel')
         return 1
     fi
-    if (( DRY_RUN )); then
-        run_cmd 'configurar prefixo npm' npm config set prefix "$CODEX_PREFIX"
-        printf '> [dry-run] configuraria o prefixo npm em %s\n' "$CODEX_PREFIX"
+    current_prefix=$(npm config get prefix 2>/dev/null || true)
+    if [[ $current_prefix == "$CODEX_PREFIX" ]]; then
+        skip 'prefixo npm do Codex já configurado'
+        CODEX_PREFIX_READY=1
         return 0
     fi
+    if [[ -n $current_prefix && $current_prefix != null ]] \
+        && ! ask_reconfigure "prefixo npm atual é $current_prefix" \
+            "prefixo npm atual é $current_prefix. deseja trocar para ~/.codex?"; then
+        skip 'prefixo npm do Codex mantido'
+        info 'Codex pode continuar no prefixo atual'
+        return 1
+    fi
+    if (( DRY_RUN )); then
+        dry_run_msg mkdir -p "$CODEX_PREFIX"
+        run_cmd 'configurar prefixo npm' npm config set prefix "$CODEX_PREFIX"
+        printf '> [dry-run] configuraria o prefixo npm em %s\n' "$CODEX_PREFIX"
+        CODEX_PREFIX_READY=1
+        return 0
+    fi
+    mkdir -p "$CODEX_PREFIX"
     if run_cmd 'configurar prefixo npm' npm config set prefix "$CODEX_PREFIX"; then
         ok 'prefixo npm configurado em ~/.codex'
+        CODEX_PREFIX_READY=1
     else
         error 'falha ao configurar prefixo npm do Codex'
         FAILURES+=('codex:prefixo')
@@ -37,6 +52,12 @@ configure_prefix() {
 
 install_codex() {
     command_exists npm || return 1
+    if [[ -x $CODEX_PREFIX/bin/codex ]] \
+        && ! ask_reconfigure 'Codex já existe em ~/.codex/bin/codex' \
+            'Codex já existe em ~/.codex/bin/codex. deseja reinstalar/atualizar?'; then
+        skip 'Codex mantido'
+        return 0
+    fi
     if (( DRY_RUN )); then
         printf '> [dry-run] instalaria Codex CLI em %s/bin\n' "$CODEX_PREFIX"
         run_cmd 'instalar Codex CLI' npm install -g @openai/codex
@@ -60,6 +81,11 @@ _append_path_line() {
         CODEX_PATH_ALREADY+=("$file")
         (( VERBOSE )) && skip "PATH já configurado em $file"
         printf 'SKIP Codex PATH already configured: %s\n' "$file" >>"$LOG_FILE"
+        return 0
+    fi
+    if [[ -f $file ]] && ! ask_additive "adicionar ~/.codex/bin ao PATH em $file?"; then
+        skip "PATH mantido em $file"
+        CODEX_PATH_SKIPPED+=("$file")
         return 0
     fi
     if (( DRY_RUN )); then
@@ -86,5 +112,7 @@ configure_path() {
     if (( ! VERBOSE && already_count > 0 )); then
         skip "$already_count arquivos PATH já configurados"
     fi
-    export PATH="$CODEX_PREFIX/bin:$PATH"
+    if (( CODEX_PREFIX_READY )); then
+        export PATH="$CODEX_PREFIX/bin:$PATH"
+    fi
 }

@@ -180,6 +180,15 @@ github_add_ssh_key() {
         GITHUB_NEW_KEY_STATUS='já existia'
         return 0
     fi
+    if [[ ${SSH_KEY_WAS_EXISTING:-0} == 1 ]] \
+        && ! ask_reconfigure 'o cadastro desta chave no GitHub' \
+            'cadastrar esta chave no GitHub?'; then
+        skip 'cadastro da chave GitHub mantido'
+        # Consumida pelo resumo do orquestrador.
+        # shellcheck disable=SC2034
+        GITHUB_NEW_KEY_STATUS='mantida'
+        return 0
+    fi
     (( VERBOSE )) && info "cadastrando chave SSH no GitHub como: $key_title"
     if run_cmd 'cadastrar SSH key no GitHub' \
         gh ssh-key add "$public_key" --title "$key_title" --type authentication; then
@@ -218,10 +227,16 @@ github_manage_ssh_key() {
     local public_key=${1:-} cleanup_status='não verificadas'
 
     if (( DRY_RUN )); then
-        _github_prompt_key_title
         printf '> [dry-run] listaria SSH keys cadastradas no GitHub\n'
         printf '> [dry-run] deletaria SSH keys antigas do GitHub se confirmado\n'
-        printf '> [dry-run] cadastraria chave SSH no GitHub com título: %s\n' "$GITHUB_KEY_TITLE"
+        if [[ ${SSH_KEY_WAS_EXISTING:-0} == 1 ]]; then
+            ask_reconfigure 'o cadastro desta chave no GitHub' \
+                'cadastrar esta chave no GitHub?' || true
+            printf '> [dry-run] manteria o cadastro da chave GitHub\n'
+        else
+            _github_prompt_key_title
+            printf '> [dry-run] cadastraria chave SSH no GitHub com título: %s\n' "$GITHUB_KEY_TITLE"
+        fi
         # Consumidas pelo resumo do orquestrador.
         # shellcheck disable=SC2034
         GITHUB_OLD_KEYS_STATUS='dry-run'
@@ -231,11 +246,29 @@ github_manage_ssh_key() {
     fi
 
     if ! _github_gh_ready; then
+        if [[ ${SSH_KEY_WAS_EXISTING:-0} == 1 ]] \
+            && ! ask_reconfigure 'o cadastro desta chave no GitHub' \
+                'cadastrar esta chave no GitHub?'; then
+            skip 'cadastro da chave GitHub mantido'
+            # Consumida pelo resumo do orquestrador.
+            # shellcheck disable=SC2034
+            GITHUB_NEW_KEY_STATUS='mantida'
+            return 0
+        fi
         _github_prompt_key_title
         github_manual_ssh_key
         return 0
     fi
     if ! github_list_ssh_keys; then
+        if [[ ${SSH_KEY_WAS_EXISTING:-0} == 1 ]] \
+            && ! ask_reconfigure 'o cadastro desta chave no GitHub' \
+                'cadastrar esta chave no GitHub?'; then
+            skip 'cadastro da chave GitHub mantido'
+            # Consumida pelo resumo do orquestrador.
+            # shellcheck disable=SC2034
+            GITHUB_NEW_KEY_STATUS='mantida'
+            return 0
+        fi
         _github_prompt_key_title
         github_manual_ssh_key
         return 0

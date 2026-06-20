@@ -4,6 +4,8 @@
 
 * Added `--doctor` for quick local diagnostics.
 * Kept the personal fast main-based installer flow.
+* Added confirmation prompts before reconfiguring existing Git, SSH, GitHub, Codex and service state.
+* `--yes` keeps safe defaults and does not force destructive reconfiguration.
 * Initial technical hardening.
 * Expanded structural, argument, security and bootstrap checks.
 * Removed unused internal state.

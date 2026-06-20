@@ -14,6 +14,8 @@ bash install.sh --dry-run
 bash install.sh --plan --verbose
 ```
 
+Ao encontrar uma configuração existente que poderia ser substituída, o archboot pergunta com `[s/N]`. Enter mantém o estado atual. `--yes` também preserva esse default seguro: ele instala somente o que falta e não força reconfigurações.
+
 ## Pacman lock
 
 O archboot não remove `/var/lib/pacman/db.lck`. Feche pacman, paru, yay ou outro gerenciador em execução e confirme o processo antes de agir:

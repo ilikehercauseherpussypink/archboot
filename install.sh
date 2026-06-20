@@ -606,8 +606,10 @@ main() {
     else
         if configure_prefix; then
             install_codex || true
+            configure_path
+        else
+            skip 'PATH do Codex não foi alterado'
         fi
-        configure_path
     fi
 
     step 10 "$TOTAL_STEPS" 'configurando Git'

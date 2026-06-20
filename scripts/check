@@ -519,6 +519,29 @@ else
     error 'confirmação GitHub não usa o fluxo s/N esperado'
     ((failures += 1))
 fi
+# Os tokens abaixo verificam o código-fonte literal.
+# shellcheck disable=SC2016
+if grep -Fq 'ask_reconfigure()' lib/ask \
+    && grep -Fq "'identidade Git já configurada'" lib/git \
+    && grep -Fq "'chave SSH local já existe'" lib/ssh \
+    && grep -Fq '_backup_ssh_key' lib/ssh \
+    && grep -Fq 'mv -- "$private_key" "$backup_private"' lib/ssh \
+    && grep -Fq "'Codex já existe em ~/.codex/bin/codex'" lib/codex \
+    && grep -Fq 'ask_additive' lib/codex \
+    && grep -Fq 'flatpak remote-modify --url' lib/flatpak \
+    && grep -Fq 'flathub já existe com configuração diferente' lib/flatpak \
+    && grep -Fq 'serviço $service está inativo' lib/service; then
+    ok 'reconfigurações existentes exigem confirmação e SSH cria backup'
+else
+    error 'confirmações ou backup de reconfiguração estão ausentes'
+    ((failures += 1))
+fi
+if rg -n 'ask_(reconfigure|additive)' lib/pkg lib/aur >/dev/null 2>&1; then
+    error 'instalação de pacotes passou a pedir confirmação individual'
+    ((failures += 1))
+else
+    ok 'pacotes já instalados continuam sendo apenas pulados'
+fi
 if grep -Eq '(rm|unlink)[[:space:]].*(\.ssh|SSH_PRIVATE_KEY|SSH_PUBLIC_KEY)' lib/ssh lib/gh; then
     error 'fluxo GitHub tenta deletar arquivos SSH locais'
     ((failures += 1))
@@ -750,6 +773,79 @@ else
     controls_fail=1
 fi
 
+if ask_reconfigure_output=$(bash -c '
+    set -Eeuo pipefail
+    source lib/ask
+    DRY_RUN=1
+    if ask_reconfigure "configuração existente"; then exit 1; fi
+' 2>&1) \
+    && grep -Fq '[dry-run] perguntaria se deve refazer configuração existente' <<<"$ask_reconfigure_output" \
+    && bash -c '
+        set -Eeuo pipefail
+        source lib/ask
+        ASSUME_YES=1
+        if ask_reconfigure "configuração existente"; then exit 1; fi
+    '; then
+    ok 'reconfiguração usa default não em dry-run e --yes'
+else
+    error 'reconfiguração não preserva default seguro'
+    controls_fail=1
+fi
+
+if bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ask
+    source lib/git
+    ASSUME_YES=1
+    DRY_RUN=0
+    LOG_FILE=/dev/null
+    GIT_NAME=""
+    GIT_EMAIL=""
+    FAILURES=()
+    git() {
+        if [[ $1 == config && $2 == --global && $3 == --get ]]; then
+            case $4 in
+                user.name) printf "existing name\n" ;;
+                user.email) printf "existing@example.test\n" ;;
+                init.defaultBranch) printf "main\n" ;;
+                pull.rebase) printf "false\n" ;;
+                core.editor) printf "code --wait\n" ;;
+            esac
+            return 0
+        fi
+        exit 91
+    }
+    command_exists() { [[ $1 != code ]]; }
+    run_cmd() { exit 90; }
+    configure_git
+    [[ $GIT_NAME == "existing name" ]]
+    [[ $GIT_EMAIL == "existing@example.test" ]]
+' >/dev/null 2>&1; then
+    ok '--yes não sobrescreve identidade Git existente'
+else
+    error '--yes tentou sobrescrever identidade Git existente'
+    controls_fail=1
+fi
+
+if bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ask
+    source lib/git
+    ASSUME_YES=1
+    DRY_RUN=0
+    LOG_FILE=/dev/null
+    git() { printf "master\n"; }
+    run_cmd() { exit 90; }
+    _configure_git_value init.defaultBranch main "branch padrão Git"
+' >/dev/null 2>&1; then
+    ok '--yes não troca preferências Git existentes'
+else
+    error '--yes tentou trocar preferência Git existente'
+    controls_fail=1
+fi
+
 if (( controls_fail )); then
     ((failures += 1))
 fi
@@ -781,10 +877,29 @@ if ssh_add_output=$(HOME="$ssh_test_home" PATH="$fake_bin:$PATH" SSH_AUTH_SOCK=m
         configure_ssh
     ' _ "$ssh_add_log" 2>&1) \
     && ! grep -Fq 'Identity added:' <<<"$ssh_add_output" \
+    && ! grep -Fq 'ssh-keygen' <<<"$ssh_add_output" \
     && grep -Fq 'Identity added:' "$ssh_add_log"; then
-    ok 'ssh-add fica silencioso no modo padrão'
+    ok 'chave SSH existente é mantida e ssh-add fica silencioso'
 else
-    error 'ssh-add vazou saída bruta no modo padrão'
+    error 'chave SSH existente foi refeita ou ssh-add vazou saída bruta'
+    ((failures += 1))
+fi
+
+if HOME="$ssh_test_home" bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ssh
+    DRY_RUN=0
+    private=$HOME/.ssh/id_ed25519
+    public=$private.pub
+    _backup_ssh_key "$private" "$public"
+    [[ ! -e $private && ! -e $public ]]
+    compgen -G "$private.bak.*" >/dev/null
+    compgen -G "$public.bak.*" >/dev/null
+' >/dev/null 2>&1; then
+    ok 'regeneração SSH preserva backups antes de substituir a chave'
+else
+    error 'backup de chave SSH não foi criado antes da regeneração'
     ((failures += 1))
 fi
 
@@ -953,6 +1068,68 @@ else
     ((failures += 1))
 fi
 
+if HOME="$ssh_test_home" bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ask
+    source lib/gh
+    ASSUME_YES=1
+    DRY_RUN=0
+    LOG_FILE=/dev/null
+    FAILURES=()
+    SSH_KEY_WAS_EXISTING=1
+    GITHUB_KEY_VALUES=()
+    printf "ssh-ed25519 AAAATEST mock@example\n" >"$HOME/.ssh/test.pub"
+    run_cmd() { exit 90; }
+    github_add_ssh_key "$HOME/.ssh/test.pub" person
+    [[ $GITHUB_NEW_KEY_STATUS == mantida ]]
+' >/dev/null 2>&1; then
+    ok '--yes não recadastra chave GitHub local existente'
+else
+    error '--yes tentou recadastrar chave GitHub existente'
+    ((failures += 1))
+fi
+
+if HOME="$ssh_test_home" bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ask
+    source lib/env
+    source lib/codex
+    ASSUME_YES=1
+    DRY_RUN=0
+    LOG_FILE=/dev/null
+    mkdir -p "$HOME/.codex/bin"
+    : >"$HOME/.codex/bin/codex"
+    chmod +x "$HOME/.codex/bin/codex"
+    run_cmd() { exit 90; }
+    install_codex
+' >/dev/null 2>&1; then
+    ok '--yes não reinstala Codex existente'
+else
+    error '--yes tentou reinstalar Codex existente'
+    ((failures += 1))
+fi
+
+if HOME="$ssh_test_home" bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ask
+    source lib/codex
+    ASSUME_YES=1
+    DRY_RUN=0
+    LOG_FILE=/dev/null
+    command_exists() { [[ $1 == npm ]]; }
+    npm() { printf "/old/npm/prefix\n"; }
+    if configure_prefix; then exit 1; fi
+    [[ $CODEX_PREFIX_READY == 0 ]]
+' >/dev/null 2>&1; then
+    ok '--yes não troca prefixo npm existente'
+else
+    error '--yes tentou trocar prefixo npm existente'
+    ((failures += 1))
+fi
+
 service_mock() {
     local mode=$1
     local marker="$ssh_test_home/service-$mode"
@@ -960,6 +1137,7 @@ service_mock() {
     HOME="$ssh_test_home" MODE="$mode" MARKER="$marker" bash -c '
         set -Eeuo pipefail
         source lib/log
+        source lib/ask
         source lib/service
         VERBOSE=0
         DRY_RUN=0
@@ -987,10 +1165,21 @@ service_mock() {
             shift
             printf "%s\n" "$*" >>"$MARKER"
         }
+        ask_reconfigure() {
+            case $MODE in
+                inactive-yes) return 0 ;;
+                *) return 1 ;;
+            esac
+        }
         service_enable system mullvad-daemon.service
         case $MODE in
-            existing)
+            inactive-yes)
                 ((${#SERVICES_ACTIVATED[@]} == 1))
+                grep -Fqx "systemctl enable --now mullvad-daemon.service" "$MARKER"
+                ;;
+            inactive-no|dry)
+                ((${#SERVICES_SKIPPED[@]} == 1))
+                [[ ! -e $MARKER ]]
                 ;;
             missing)
                 ((${#SERVICES_SKIPPED[@]} == 1))
@@ -1000,20 +1189,17 @@ service_mock() {
                 ((${#SERVICES_ALREADY[@]} == 1))
                 [[ ! -e $MARKER ]]
                 ;;
-            dry)
-                ((${#SERVICES_PLANNED[@]} == 1))
-                grep -Fqx "systemctl enable --now mullvad-daemon.service" "$MARKER"
-                ;;
         esac
         ((${#FAILURES[@]} == 0))
     '
 }
 
-if service_mock existing >/dev/null 2>&1 \
+if service_mock inactive-yes >/dev/null 2>&1 \
+    && service_mock inactive-no >/dev/null 2>&1 \
     && service_mock missing >/dev/null 2>&1 \
     && service_mock active >/dev/null 2>&1 \
     && service_mock dry >/dev/null 2>&1; then
-    ok 'serviços suportam existente, ausente, ativo e dry-run'
+    ok 'serviços inativos pedem confirmação; ativos e ausentes são pulados'
 else
     error 'mock modular de serviços falhou'
     ((failures += 1))
@@ -1061,6 +1247,7 @@ readme_tokens=(
     'bash install.sh --plan --verbose'
     'bash install.sh --yes'
     'bash install.sh --doctor'
+    'Enter mantém o estado atual'
     'ARCHBOOT_CI=1'
     'Safer audit-first install'
     'https://github.com/OWNER/REPO'
@@ -1082,6 +1269,7 @@ for token in "${cloudflare_readme_tokens[@]}"; do
         docs_fail=1
     fi
 done
+# shellcheck disable=SC2016
 troubleshooting_tokens=(
     'bash -s -- --doctor'
     'https://shelies.org/health'
@@ -1089,6 +1277,7 @@ troubleshooting_tokens=(
     'gh auth status'
     'ssh -T git@github.com'
     'tail -n 120 ~/.local/state/archboot/logs/ARQUIVO.log'
+    '`--yes` também preserva esse default seguro'
 )
 for token in "${troubleshooting_tokens[@]}"; do
     if ! grep -Fiq "$token" docs/TROUBLESHOOTING.md; then

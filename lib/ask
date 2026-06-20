@@ -23,7 +23,7 @@ yesno() {
     fi
 
     while true; do
-        read -r -p "> [ask] $question [$prompt_hint] " answer || answer=''
+        read -r -p "> [?] $question [$prompt_hint] " answer || answer=''
         answer=${answer,,}
         [[ -z $answer ]] && answer=$default
         case $answer in
@@ -32,6 +32,35 @@ yesno() {
             *) warn 'responda com s ou n' ;;
         esac
     done
+}
+
+ask_reconfigure() {
+    local description=$1 question=${2:-"$1. deseja refazer?"}
+
+    if (( ${DRY_RUN:-0} )); then
+        printf '> [dry-run] perguntaria se deve refazer %s\n' "$description"
+        return 1
+    fi
+    if (( ${ASSUME_YES:-0} || ${CI_MODE:-0} == 1 || ${PLAN_ONLY:-0} || ${DOCTOR_ONLY:-0} )); then
+        return 1
+    fi
+    yesno "$question" n
+}
+
+ask_additive() {
+    local question=$1
+
+    if (( ${DRY_RUN:-0} )); then
+        printf '> [dry-run] perguntaria se deve %s\n' "$question"
+        return 0
+    fi
+    if (( ${ASSUME_YES:-0} )); then
+        return 0
+    fi
+    if (( ${CI_MODE:-0} == 1 || ${PLAN_ONLY:-0} || ${DOCTOR_ONLY:-0} )); then
+        return 1
+    fi
+    yesno "$question" s
 }
 
 prompt() {
@@ -47,10 +76,10 @@ prompt() {
     fi
 
     if [[ -n $default ]]; then
-        read -r -p "> [ask] $question [$default]: " answer || answer=''
+        read -r -p "> [?] $question [$default]: " answer || answer=''
         answer=${answer:-$default}
     else
-        read -r -p "> [ask] $question: " answer || answer=''
+        read -r -p "> [?] $question: " answer || answer=''
     fi
     printf -v "$variable" '%s' "$answer"
 }
@@ -59,5 +88,5 @@ pause() {
     local message=${1:-'Pressione Enter para continuar.'}
     (( ${ASSUME_YES:-0} )) && return 0
     is_interactive || return 0
-    read -r -p "> [ask] $message" _ || true
+    read -r -p "> [?] $message" _ || true
 }

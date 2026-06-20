@@ -79,6 +79,8 @@ Flags disponíveis:
 
 `--yes` significa "non-interactive safe defaults", não confirmação irrestrita. Quando não existe um default seguro, a ação é pulada com aviso.
 
+Quando uma configuração existente precisaria ser refeita ou substituída, o archboot pergunta antes. Enter mantém o estado atual. Isso inclui identidade Git, chave SSH, cadastro no GitHub, prefixo e instalação do Codex, PATH, Flathub divergente e serviços inativos.
+
 ## What it does
 
 * Instala pacotes pacman.

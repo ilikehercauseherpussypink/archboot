@@ -81,6 +81,12 @@ service_enable() {
         printf 'SKIP service already ready: %s:%s\n' "$scope" "$service" >>"$LOG_FILE"
         return 0
     fi
+    if ! ask_reconfigure "serviço $service está inativo" \
+        "serviço $service está inativo. deseja ativar agora?"; then
+        skip "$service mantido inativo"
+        SERVICES_SKIPPED+=("$scope:$service")
+        return 0
+    fi
     if (( DRY_RUN )); then
         if [[ $scope == system ]]; then
             run_sudo "ativar serviço: $service" systemctl enable --now "$service"

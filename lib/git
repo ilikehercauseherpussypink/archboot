@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 configure_git() {
-    local current_name current_email name email change_identity=1
+    local current_name current_email name email
 
     command_exists git || {
         warn 'git indisponível; configuração Git pulada'
@@ -15,40 +15,58 @@ configure_git() {
     [[ -n $current_name ]] && info "git user.name atual: $current_name"
     [[ -n $current_email ]] && info "git user.email atual: $current_email"
 
-    if [[ -n $current_name && -n $current_email ]]; then
-        if ! yesno 'Sobrescrever a identidade Git global?' n; then
-            change_identity=0
-            name=$current_name
-            email=$current_email
+    if [[ -n $current_name || -n $current_email ]]; then
+        if ! ask_reconfigure 'identidade Git já configurada'; then
             skip 'identidade Git mantida'
+        else
+            prompt name 'git user.name' "$current_name"
+            prompt email 'git user.email' "$current_email"
+            _configure_git_identity "$name" "$email"
         fi
-    fi
-
-    if (( change_identity )); then
+    else
         prompt name 'git user.name' "$current_name"
         prompt email 'git user.email' "$current_email"
-        if [[ -z $name || -z $email ]]; then
-            warn 'nome ou email vazio; identidade Git não alterada'
-        else
-            if (( DRY_RUN )); then
-                run_cmd 'git user.name' git config --global user.name "$name"
-                run_cmd 'git user.email' git config --global user.email "$email"
-                printf '> [dry-run] configuraria identidade Git global\n'
-            else
-                run_cmd 'git user.name' git config --global user.name "$name" \
-                    && run_cmd 'git user.email' git config --global user.email "$email"
-                ok 'identidade Git configurada'
-            fi
-        fi
+        _configure_git_identity "$name" "$email"
     fi
 
-    run_cmd 'branch padrão Git' git config --global init.defaultBranch main || true
-    run_cmd 'estratégia pull Git' git config --global pull.rebase false || true
+    _configure_git_value init.defaultBranch main 'branch padrão Git'
+    _configure_git_value pull.rebase false 'estratégia pull Git'
     if command_exists code; then
-        run_cmd 'editor Git' git config --global core.editor 'code --wait' || true
+        _configure_git_value core.editor 'code --wait' 'editor Git'
     fi
 
     GIT_NAME=$(git config --global --get user.name 2>/dev/null || true)
     GIT_EMAIL=$(git config --global --get user.email 2>/dev/null || true)
     export GIT_NAME GIT_EMAIL
+}
+
+_configure_git_identity() {
+    local name=${1:-} email=${2:-}
+    if [[ -z $name || -z $email ]]; then
+        warn 'nome ou email vazio; identidade Git não alterada'
+        return 0
+    fi
+    if (( DRY_RUN )); then
+        run_cmd 'git user.name' git config --global user.name "$name"
+        run_cmd 'git user.email' git config --global user.email "$email"
+        printf '> [dry-run] configuraria identidade Git global\n'
+    elif run_cmd 'git user.name' git config --global user.name "$name" \
+        && run_cmd 'git user.email' git config --global user.email "$email"; then
+        ok 'identidade Git configurada'
+    fi
+}
+
+_configure_git_value() {
+    local key=$1 desired=$2 label=$3 current=''
+    current=$(git config --global --get "$key" 2>/dev/null || true)
+    if [[ $current == "$desired" ]]; then
+        skip "git $key já configurado"
+        return 0
+    fi
+    if [[ -n $current ]] \
+        && ! ask_reconfigure "git $key já é $current" "git $key já é $current. deseja trocar para $desired?"; then
+        skip "git $key mantido"
+        return 0
+    fi
+    run_cmd "$label" git config --global "$key" "$desired" || true
 }
