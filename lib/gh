@@ -48,9 +48,8 @@ _github_gh_ready() {
 }
 
 github_list_ssh_keys() {
-    local display=${1:-1}
     local output='' key_id='' encoded_title='' encoded_key='' extra=''
-    local key_title='' key_value='' index=0 key_count=0 key_label='SSH keys cadastradas no GitHub'
+    local key_title='' key_value='' index=0
     GITHUB_KEY_IDS=()
     GITHUB_KEY_TITLES=()
     GITHUB_KEY_VALUES=()
@@ -64,7 +63,6 @@ github_list_ssh_keys() {
     fi
 
     [[ -n $output ]] || {
-        (( display )) && info 'nenhuma SSH key antiga encontrada'
         GITHUB_OLD_KEYS_STATUS='mantidas'
         return 0
     }
@@ -89,22 +87,11 @@ github_list_ssh_keys() {
     done <<<"$output"
 
     if ((${#GITHUB_KEY_IDS[@]})); then
-        key_count=${#GITHUB_KEY_IDS[@]}
-        (( key_count == 1 )) && key_label='SSH key cadastrada no GitHub'
-        if (( display )); then
-            info "$key_count $key_label"
-            if (( VERBOSE )); then
-                for index in "${!GITHUB_KEY_IDS[@]}"; do
-                    info "${GITHUB_KEY_IDS[$index]} ${GITHUB_KEY_TITLES[$index]}"
-                done
-            fi
-        fi
         for index in "${!GITHUB_KEY_IDS[@]}"; do
             printf 'GitHub SSH key: %s %s\n' \
                 "${GITHUB_KEY_IDS[$index]}" "${GITHUB_KEY_TITLES[$index]}" >>"$LOG_FILE"
         done
     else
-        (( display )) && info 'nenhuma SSH key cadastrada no GitHub'
         GITHUB_OLD_KEYS_STATUS='mantidas'
     fi
 }
