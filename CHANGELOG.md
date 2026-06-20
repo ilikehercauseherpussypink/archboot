@@ -6,6 +6,9 @@
 * Kept the personal fast main-based installer flow.
 * Added confirmation prompts before reconfiguring existing Git, SSH, GitHub, Codex and service state.
 * `--yes` keeps safe defaults and does not force destructive reconfiguration.
+* Fixed sudo command resolution when the installer validation helper is loaded.
+* Hardened app/service parsing, SSH backup recovery and bootstrap minimum-PATH handling.
+* Expanded regression coverage for bootstrap failures, Worker behavior, prompts and side effects.
 * Initial technical hardening.
 * Expanded structural, argument, security and bootstrap checks.
 * Removed unused internal state.

@@ -257,6 +257,7 @@ echo example.service >> services/system
 ```
 
 Linhas vazias e comentários iniciados por `#` são ignorados. Confirme sempre o nome correto na fonte escolhida.
+Entradas inválidas ou duplicadas na mesma fonte são rejeitadas por `bash scripts/check` e ignoradas pelo instalador.
 
 ## Checks
 

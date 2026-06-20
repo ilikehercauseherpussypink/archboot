@@ -11,8 +11,13 @@ _service_trim() {
 }
 
 _read_service_file() {
-    local file=$1 line='' service=''
+    local file=$1 line='' service='' existing=''
     local -n target=$2
+
+    [[ -f $file ]] || {
+        error "arquivo de serviços ausente: $file"
+        return 1
+    }
 
     while IFS= read -r line || [[ -n $line ]]; do
         line=$(_service_trim "$line")
@@ -24,6 +29,16 @@ _read_service_file() {
             warn "serviço ignorado por conter espaços: $service"
             continue
         fi
+        if ! [[ $service =~ ^[A-Za-z0-9@_.:-]+\.service$ ]]; then
+            warn "serviço ignorado por formato inválido: $service"
+            continue
+        fi
+        for existing in "${target[@]}"; do
+            if [[ $existing == "$service" ]]; then
+                warn "serviço duplicado ignorado: $service"
+                continue 2
+            fi
+        done
         target+=("$service")
     done <"$file"
 }
@@ -31,8 +46,8 @@ _read_service_file() {
 read_services() {
     SYSTEM_SERVICES=()
     USER_SERVICES=()
-    _read_service_file "$ARCHBOOT_ROOT/services/system" SYSTEM_SERVICES
-    _read_service_file "$ARCHBOOT_ROOT/services/user" USER_SERVICES
+    _read_service_file "$ARCHBOOT_ROOT/services/system" SYSTEM_SERVICES || return 1
+    _read_service_file "$ARCHBOOT_ROOT/services/user" USER_SERVICES || return 1
 }
 
 print_services_plan() {

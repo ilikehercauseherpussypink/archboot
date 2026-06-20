@@ -27,7 +27,7 @@ _doctor_system() {
         ok 'execução como usuário comum'
     fi
 
-    if command_exists sudo; then
+    if type -P sudo >/dev/null 2>&1; then
         ok 'sudo disponível'
     else
         _doctor_essential_failure 'sudo ausente'

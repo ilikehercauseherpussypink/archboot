@@ -59,8 +59,18 @@ run_cmd() {
 
 run_sudo() {
     local label=$1
+    local sudo_bin=''
     shift
-    run_cmd "$label" "$(command -v sudo)" -- "$@"
+    sudo_bin=$(type -P sudo 2>/dev/null || true)
+    [[ -n $sudo_bin ]] || {
+        error 'sudo não está disponível para executar esta ação'
+        return 127
+    }
+    if (( DRY_RUN )); then
+        dry_run_msg sudo -- "$@"
+        return 0
+    fi
+    run_cmd "$label" "$sudo_bin" -- "$@"
 }
 
 run_quiet() {

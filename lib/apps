@@ -3,12 +3,38 @@
 declare -ag PACMAN_APPS=() PACMAN_CORE=() PACMAN_REST=()
 declare -ag FLATPAK_APPS=() AUR_APPS=()
 declare -Ag APP_COUNTS=()
+declare -Ag APP_SEEN=()
 
 _trim() {
     local value=$1
     value="${value#"${value%%[![:space:]]*}"}"
     value="${value%"${value##*[![:space:]]}"}"
     printf '%s' "$value"
+}
+
+_app_item_valid() {
+    local source=$1 item=$2
+    case $source in
+        flatpak) [[ $item =~ ^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+){2,}$ ]] ;;
+        pacman|aur) [[ $item =~ ^[A-Za-z0-9@._+-]+$ ]] ;;
+        *) return 1 ;;
+    esac
+}
+
+_reset_source_apps() {
+    local source=$1 key
+    case $source in
+        pacman) PACMAN_APPS=(); PACMAN_CORE=(); PACMAN_REST=() ;;
+        flatpak) FLATPAK_APPS=() ;;
+        aur) AUR_APPS=() ;;
+    esac
+    for key in "${!APP_COUNTS[@]}"; do
+        [[ $key == "$source/"* ]] && unset 'APP_COUNTS[$key]'
+    done
+    for key in "${!APP_SEEN[@]}"; do
+        [[ $key == "$source:"* ]] && unset 'APP_SEEN[$key]'
+    done
+    return 0
 }
 
 _read_app_file() {
@@ -28,6 +54,15 @@ _read_app_file() {
             warn "$key: entrada ignorada por conter espaços: $item"
             continue
         fi
+        if ! _app_item_valid "$source" "$item"; then
+            warn "$key: entrada ignorada por formato inválido: $item"
+            continue
+        fi
+        if [[ -n ${APP_SEEN["$source:$item"]:-} ]]; then
+            warn "$key: entrada duplicada ignorada: $item"
+            continue
+        fi
+        APP_SEEN["$source:$item"]=$file
         target+=("$item")
         ((count += 1))
         if [[ $source == pacman ]]; then
@@ -49,6 +84,11 @@ read_source_apps() {
     # Recebe entradas de pacman por nameref; a classificação ocorre no parser.
     # shellcheck disable=SC2034
     local -a scratch=()
+    [[ -d $directory ]] || {
+        error "diretório apps/$source ausente"
+        return 1
+    }
+    _reset_source_apps "$source"
     mapfile -d '' -t files < <(find "$directory" -maxdepth 1 -type f -print0 | sort -z)
     for file in "${files[@]}"; do
         case $source in
@@ -82,10 +122,13 @@ validate_apps() {
         }
     done
     for item in "${PACMAN_APPS[@]}" "${AUR_APPS[@]}"; do
-        [[ $item =~ ^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+){2,}$ ]] && {
+        if ! [[ $item =~ ^[A-Za-z0-9@._+-]+$ ]]; then
+            warn "pacote com formato inválido: $item"
+            valid=0
+        elif [[ $item =~ ^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+){2,}$ ]]; then
             warn "pacote parece ID Flatpak: $item"
             valid=0
-        }
+        fi
     done
     (( valid ))
 }

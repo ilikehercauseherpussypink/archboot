@@ -75,6 +75,8 @@ done
 
 step 3 10 'validando listas de apps'
 flatpak_pattern='^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+){2,}$'
+package_pattern='^[A-Za-z0-9@._+-]+$'
+declare -A seen_apps=()
 for file in apps/flatpak/*; do
     while IFS= read -r app; do
         if [[ $app == @openai/codex ]]; then
@@ -85,6 +87,11 @@ for file in apps/flatpak/*; do
                 error "$file contém ID Flatpak improvável: $app"
                 ((failures += 1))
             fi
+        elif [[ -n ${seen_apps["flatpak:$app"]:-} ]]; then
+            error "$file duplica $app já listado em ${seen_apps["flatpak:$app"]}"
+            ((failures += 1))
+        else
+            seen_apps["flatpak:$app"]=$file
         fi
     done < <(app_lines "$file")
 done
@@ -97,9 +104,71 @@ for source in pacman aur; do
             elif [[ $app =~ $flatpak_pattern ]]; then
                 error "$file parece conter ID Flatpak: $app"
                 ((failures += 1))
+            elif [[ ! $app =~ $package_pattern ]]; then
+                error "$file contém pacote com formato inválido: $app"
+                ((failures += 1))
+            elif [[ -n ${seen_apps["$source:$app"]:-} ]]; then
+                error "$file duplica $app já listado em ${seen_apps["$source:$app"]}"
+                ((failures += 1))
+            else
+                seen_apps["$source:$app"]=$file
             fi
         done < <(app_lines "$file")
     done
+done
+if bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/apps
+    ARCHBOOT_ROOT=$1
+    LOG_FILE=/dev/null
+    read_pacman
+    [[ ${#PACMAN_APPS[@]} == 11 ]]
+    read_flatpak
+    read_aur
+    read_pacman
+    [[ ${#PACMAN_APPS[@]} == 11 ]]
+    [[ ${#FLATPAK_APPS[@]} == 5 ]]
+    [[ ${#AUR_APPS[@]} == 3 ]]
+' _ "$ROOT" >/dev/null 2>&1; then
+    ok 'leitura de apps é idempotente por fonte'
+else
+    error 'leitura repetida de apps duplicou ou perdeu entradas'
+    ((failures += 1))
+fi
+if ! bash -c '
+    set -Eeuo pipefail
+    source lib/apps
+    _app_item_valid pacman "bad;package"
+' >/dev/null 2>&1 \
+    && ! bash -c '
+        set -Eeuo pipefail
+        source lib/apps
+        _app_item_valid aur "bad package"
+    ' >/dev/null 2>&1 \
+    && ! bash -c '
+        set -Eeuo pipefail
+        source lib/apps
+        _app_item_valid flatpak "not-a-flatpak"
+    ' >/dev/null 2>&1; then
+    ok 'parser rejeita entradas de apps inseguras ou improváveis'
+else
+    error 'parser aceitou entrada de app inválida'
+    ((failures += 1))
+fi
+for file in services/system services/user; do
+    declare -A seen_services=()
+    while IFS= read -r service; do
+        if [[ ! $service =~ ^[A-Za-z0-9@_.:-]+\.service$ ]]; then
+            error "$file contém serviço com formato inválido: $service"
+            ((failures += 1))
+        elif [[ -n ${seen_services["$service"]:-} ]]; then
+            error "$file duplica serviço: $service"
+            ((failures += 1))
+        else
+            seen_services["$service"]=1
+        fi
+    done < <(app_lines "$file")
 done
 (( failures == 0 )) && ok 'listas de apps válidas'
 if grep -Fxq easyeffects apps/pacman/audio; then
@@ -247,11 +316,12 @@ while (($#)); do
     fi
 done
 [[ -n $output ]] || exit 2
-if [[ $BOOTSTRAP_MODE == empty ]]; then
-    : >"$output"
-else
-    head -c 2048 /dev/zero >"$output"
-fi
+case $BOOTSTRAP_MODE in
+    curlfail) exit 22 ;;
+    empty) : >"$output" ;;
+    small) head -c 512 /dev/zero >"$output" ;;
+    *) head -c 2048 /dev/zero >"$output" ;;
+esac
 EOF
 cat >"$bootstrap_bin/tar" <<'EOF'
 #!/usr/bin/env bash
@@ -318,6 +388,34 @@ else
     ((failures += 1))
 fi
 
+bootstrap_small_dir="$ssh_test_home/bootstrap-small"
+if bootstrap_small_output=$(BOOTSTRAP_TEMP="$bootstrap_small_dir" BOOTSTRAP_MODE=small \
+    CURL_ARGS_FILE="$ssh_test_home/curl-small.args" \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou tarball pequeno demais'
+    ((failures += 1))
+elif grep -Fq 'tarball inválido: arquivo menor que 1 KiB' <<<"$bootstrap_small_output" \
+    && [[ ! -e $bootstrap_small_dir ]]; then
+    ok 'bootstrap rejeita tarball pequeno demais e limpa temporário'
+else
+    error 'bootstrap pequeno falhou sem mensagem ou limpeza esperada'
+    ((failures += 1))
+fi
+
+bootstrap_curlfail_dir="$ssh_test_home/bootstrap-curlfail"
+if bootstrap_curlfail_output=$(BOOTSTRAP_TEMP="$bootstrap_curlfail_dir" BOOTSTRAP_MODE=curlfail \
+    CURL_ARGS_FILE="$ssh_test_home/curl-curlfail.args" \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou falha de curl'
+    ((failures += 1))
+elif grep -Fq 'falha ao baixar o tarball' <<<"$bootstrap_curlfail_output" \
+    && [[ ! -e $bootstrap_curlfail_dir ]]; then
+    ok 'bootstrap trata falha de curl e limpa temporário'
+else
+    error 'falha de curl não foi tratada com segurança'
+    ((failures += 1))
+fi
+
 bootstrap_incomplete_dir="$ssh_test_home/bootstrap-incomplete"
 if bootstrap_incomplete_output=$(BOOTSTRAP_TEMP="$bootstrap_incomplete_dir" BOOTSTRAP_MODE=incomplete \
     CURL_ARGS_FILE="$ssh_test_home/curl-incomplete.args" \
@@ -329,6 +427,20 @@ elif grep -Fq 'diretório lib/ ausente ou inválido no tarball' <<<"$bootstrap_i
     ok 'bootstrap rejeita estrutura incompleta e limpa temporário'
 else
     error 'bootstrap incompleto falhou sem mensagem ou limpeza esperada'
+    ((failures += 1))
+fi
+
+bootstrap_tarfail_dir="$ssh_test_home/bootstrap-tarfail"
+if bootstrap_tarfail_output=$(BOOTSTRAP_TEMP="$bootstrap_tarfail_dir" BOOTSTRAP_MODE=tarfail \
+    CURL_ARGS_FILE="$ssh_test_home/curl-tarfail.args" \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou falha de tar'
+    ((failures += 1))
+elif grep -Fq 'tarball inválido ou corrompido' <<<"$bootstrap_tarfail_output" \
+    && [[ ! -e $bootstrap_tarfail_dir ]]; then
+    ok 'bootstrap trata falha de tar e limpa temporário'
+else
+    error 'falha de tar não foi tratada com segurança'
     ((failures += 1))
 fi
 
@@ -395,10 +507,14 @@ else
 fi
 
 invalid_bootstrap_env=0
-for invalid_repo in \
+for invalid_repo in '' \
     'http://github.com/owner/repo' \
     'https://example.com/owner/repo' \
-    'https://github.com/owner/repo;echo'; do
+    'https://github.com/owner/repo;echo' \
+    'https://github.com/owner/repo with-space' \
+    'https://github.com/owner/repo|cat' \
+    "https://github.com/owner/\$repo" \
+    'https://github.com/owner/repo/extra'; do
     if ARCHBOOT_REPO=$invalid_repo BOOTSTRAP_MODE=valid \
         BOOTSTRAP_TEMP="$ssh_test_home/bootstrap-invalid-repo" \
         CURL_ARGS_FILE="$ssh_test_home/curl-invalid-repo.args" PATH="$bootstrap_bin:$PATH" \
@@ -409,7 +525,8 @@ for invalid_repo in \
     fi
 done
 
-for invalid_branch in '' 'bad branch' '../main' 'main;echo' 'main|cat' 'feature//test'; do
+for invalid_branch in '' 'bad branch' '../main' 'feature/../main' 'main..old' \
+    'main;echo' 'main|cat' "main\$branch" 'feature//test'; do
     if ARCHBOOT_BRANCH=$invalid_branch BOOTSTRAP_MODE=valid \
         BOOTSTRAP_TEMP="$ssh_test_home/bootstrap-invalid-branch" \
         CURL_ARGS_FILE="$ssh_test_home/curl-invalid-branch.args" PATH="$bootstrap_bin:$PATH" \
@@ -420,6 +537,41 @@ for invalid_branch in '' 'bad branch' '../main' 'main;echo' 'main|cat' 'feature/
     fi
 done
 (( invalid_bootstrap_env )) || ok 'bootstrap rejeita repositórios e branches inválidos'
+
+missing_tool_bin="$ssh_test_home/missing-tool-bin"
+mkdir -p "$missing_tool_bin"
+ln -s "$(type -P bash)" "$missing_tool_bin/bash"
+if missing_curl_output=$(PATH="$missing_tool_bin" "$missing_tool_bin/bash" -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou ausência de curl'
+    ((failures += 1))
+elif grep -Fq 'curl é necessário para baixar o projeto completo' <<<"$missing_curl_output"; then
+    ok 'bootstrap informa ausência de curl'
+else
+    error 'ausência de curl falhou sem mensagem clara'
+    ((failures += 1))
+fi
+
+ln -s "$(type -P curl)" "$missing_tool_bin/curl"
+if missing_tar_output=$(PATH="$missing_tool_bin" "$missing_tool_bin/bash" -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou ausência de tar'
+    ((failures += 1))
+elif grep -Fq 'tar é necessário para extrair o projeto completo' <<<"$missing_tar_output"; then
+    ok 'bootstrap informa ausência de tar'
+else
+    error 'ausência de tar falhou sem mensagem clara'
+    ((failures += 1))
+fi
+
+ln -s "$(type -P tar)" "$missing_tool_bin/tar"
+if missing_mktemp_output=$(PATH="$missing_tool_bin" "$missing_tool_bin/bash" -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou ausência de mktemp'
+    ((failures += 1))
+elif grep -Fq 'mktemp é necessário para criar um diretório temporário seguro' <<<"$missing_mktemp_output"; then
+    ok 'bootstrap informa ausência de mktemp'
+else
+    error 'ausência de mktemp falhou sem mensagem clara'
+    ((failures += 1))
+fi
 
 local_curl_marker="$ssh_test_home/local-curl-called"
 cat >"$bootstrap_bin/curl" <<EOF
@@ -526,6 +678,7 @@ if grep -Fq 'ask_reconfigure()' lib/ask \
     && grep -Fq "'chave SSH local já existe'" lib/ssh \
     && grep -Fq '_backup_ssh_key' lib/ssh \
     && grep -Fq 'mv -- "$private_key" "$backup_private"' lib/ssh \
+    && grep -Fq 'UserKnownHostsFile=/dev/null' lib/ssh \
     && grep -Fq "'Codex já existe em ~/.codex/bin/codex'" lib/codex \
     && grep -Fq 'ask_additive' lib/codex \
     && grep -Fq 'flatpak remote-modify --url' lib/flatpak \
@@ -744,6 +897,12 @@ if ARCHBOOT_CI=1 bash install.sh >/dev/null 2>&1; then
 else
     ok 'ARCHBOOT_CI=1 bloqueia execução mutável'
 fi
+if ARCHBOOT_CI=invalid bash install.sh --plan >/dev/null 2>&1; then
+    error 'ARCHBOOT_CI inválido foi aceito'
+    controls_fail=1
+else
+    ok 'ARCHBOOT_CI inválido falha de forma explícita'
+fi
 
 # A expressão é intencionalmente literal para validar o código-fonte.
 # shellcheck disable=SC2016
@@ -770,6 +929,51 @@ if bash -c '
     ok '--yes preserva defaults seguros'
 else
     error '--yes confirmou ação com default não ou pediu input'
+    controls_fail=1
+fi
+
+ask_prompt_test() {
+    local input=$1 expected=$2
+    printf '%b' "$input" | bash -c '
+        set -Eeuo pipefail
+        source lib/log
+        source lib/ask
+        is_interactive() { return 0; }
+        yesno "teste" n
+    ' >/dev/null 2>&1
+    [[ $? == "$expected" ]]
+}
+if ask_prompt_test '\n' 1 \
+    && ask_prompt_test 'n\n' 1 \
+    && ask_prompt_test 'N\n' 1 \
+    && ask_prompt_test 's\n' 0 \
+    && ask_prompt_test 'S\n' 0 \
+    && ask_prompt_test 'inválido\ns\n' 0 \
+    && { bash -c '
+        set -Eeuo pipefail
+        source lib/log
+        source lib/ask
+        is_interactive() { return 0; }
+        yesno "teste" n
+    ' </dev/null >/dev/null 2>&1; [[ $? == 1 ]]; }; then
+    ok 'prompts s/N tratam enter, maiúsculas, inválidos e stdin fechado'
+else
+    error 'prompt s/N não preserva o default seguro'
+    controls_fail=1
+fi
+
+doctor_home="$ssh_test_home/doctor-home"
+if HOME="$doctor_home" ARCHBOOT_ROOT="$ROOT" CI_MODE=1 bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/env
+    source lib/doctor
+    doctor_run
+    [[ ! -e $HOME/.ssh && ! -e $HOME/.codex && ! -e $HOME/.config ]]
+' >/dev/null 2>&1; then
+    ok 'doctor CI não cria arquivos no HOME temporário'
+else
+    error 'doctor CI criou estado no HOME temporário'
     controls_fail=1
 fi
 
@@ -850,8 +1054,32 @@ if (( controls_fail )); then
     ((failures += 1))
 fi
 
-ssh_add_log="$ssh_test_home/ssh-add.log"
 fake_bin="$ssh_test_home/bin"
+sudo_marker="$ssh_test_home/sudo-marker"
+mkdir -p "$fake_bin"
+cat >"$fake_bin/sudo" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$sudo_marker"
+EOF
+chmod +x "$fake_bin/sudo"
+if PATH="$fake_bin:$PATH" SUDO_MARKER="$sudo_marker" bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/run
+    sudo() { return 0; }
+    DRY_RUN=0
+    VERBOSE=0
+    LOG_FILE=/dev/null
+    run_sudo "mock sudo" pacman -S mock-package
+' >/dev/null 2>&1 \
+    && grep -Fqx -- '-- pacman -S mock-package' "$sudo_marker"; then
+    ok 'run_sudo usa o binário sudo, não a função de validação'
+else
+    error 'run_sudo não executou o binário sudo esperado'
+    ((failures += 1))
+fi
+
+ssh_add_log="$ssh_test_home/ssh-add.log"
 mkdir -p "$fake_bin"
 cat >"$fake_bin/ssh-add" <<'EOF'
 #!/usr/bin/env bash
@@ -900,6 +1128,25 @@ if HOME="$ssh_test_home" bash -c '
     ok 'regeneração SSH preserva backups antes de substituir a chave'
 else
     error 'backup de chave SSH não foi criado antes da regeneração'
+    ((failures += 1))
+fi
+
+if HOME="$ssh_test_home" bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ssh
+    private=$HOME/.ssh/restore-test
+    public=$private.pub
+    printf private >"$private"
+    printf public >"$public"
+    _backup_ssh_key "$private" "$public"
+    _restore_ssh_backup "$private" "$public"
+    [[ $(<"$private") == private ]]
+    [[ $(<"$public") == public ]]
+' >/dev/null 2>&1; then
+    ok 'falha de geração SSH pode restaurar a chave anterior'
+else
+    error 'restauração de backup SSH falhou'
     ((failures += 1))
 fi
 
@@ -1127,6 +1374,34 @@ if HOME="$ssh_test_home" bash -c '
     ok '--yes não troca prefixo npm existente'
 else
     error '--yes tentou trocar prefixo npm existente'
+    ((failures += 1))
+fi
+
+if flatpak_divergent_output=$(bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ask
+    source lib/flatpak
+    DRY_RUN=1
+    LOG_FILE=/dev/null
+    FAILURES=()
+    flatpak() {
+        if [[ $1 == remotes && $2 == --columns=name ]]; then
+            printf "flathub\n"
+        elif [[ $1 == remotes && $2 == --show-details ]]; then
+            printf "flathub\tFlathub\thttps://example.invalid/repo/\n"
+        else
+            exit 90
+        fi
+    }
+    run_cmd() { exit 90; }
+    flatpak_remote
+' 2>&1) \
+    && grep -Fq '[dry-run] perguntaria se deve refazer flathub já existe com configuração diferente' <<<"$flatpak_divergent_output" \
+    && ! grep -Fq 'remote-modify' <<<"$flatpak_divergent_output"; then
+    ok 'Flathub divergente pede confirmação e dry-run não o modifica'
+else
+    error 'Flathub divergente não preserva confirmação segura'
     ((failures += 1))
 fi
 
@@ -1401,6 +1676,56 @@ if command -v node >/dev/null 2>&1; then
         ok 'node --check cloudflare/worker.js'
     else
         error 'sintaxe JavaScript inválida no Worker'
+        worker_fail=1
+    fi
+    worker_module="$ssh_test_home/worker.mjs"
+    cp "$worker" "$worker_module"
+    if node --input-type=module - "$worker_module" <<'EOF'
+import { pathToFileURL } from "node:url";
+
+const { default: worker } = await import(pathToFileURL(process.argv[2]).href);
+const calls = [];
+globalThis.fetch = async (url, init) => {
+  calls.push({ url: String(url), method: init.method });
+  return new Response("#!/usr/bin/env bash\necho archboot\n", { status: 200 });
+};
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+
+let response = await worker.fetch(new Request("https://worker.example/health"), {});
+assert(response.status === 200, "health status");
+assert((await response.text()) === "ok\n", "health body");
+assert(calls.length === 0, "health should not fetch upstream");
+
+response = await worker.fetch(new Request("https://worker.example/", { method: "POST" }), {});
+assert(response.status === 405, "invalid method status");
+assert(response.headers.get("Allow") === "GET, HEAD", "invalid method allow");
+
+response = await worker.fetch(new Request("https://worker.example/missing"), {});
+assert(response.status === 404, "missing path status");
+
+response = await worker.fetch(new Request("https://worker.example/install.sh"), {});
+assert(response.status === 200, "GET upstream status");
+assert(response.headers.get("Content-Type") === "text/x-shellscript; charset=utf-8", "script content type");
+assert(response.headers.get("X-Content-Type-Options") === "nosniff", "nosniff header");
+assert((await response.text()).startsWith("#!/usr/bin/env bash"), "GET upstream body");
+assert(calls.at(-1).url === "https://raw.githubusercontent.com/ilikehercauseherpussypink/archboot/main/install.sh", "upstream URL");
+assert(calls.at(-1).method === "GET", "GET upstream method");
+
+response = await worker.fetch(new Request("https://worker.example/", { method: "HEAD" }), {});
+assert(response.status === 200, "HEAD upstream status");
+assert(response.body === null, "HEAD body must be null");
+assert(calls.at(-1).method === "HEAD", "HEAD upstream method");
+
+globalThis.fetch = async () => new Response("missing", { status: 404 });
+response = await worker.fetch(new Request("https://worker.example/"), {});
+assert(response.status === 502, "upstream failure status");
+EOF
+    then
+        ok 'Worker responde corretamente a métodos, paths e upstream mockado'
+    else
+        error 'teste funcional do Worker falhou'
         worker_fail=1
     fi
 else

@@ -16,11 +16,13 @@ root() {
 }
 
 sudo() {
-    command_exists sudo || die 'sudo não está instalado; instale sudo e configure seu usuário'
+    local sudo_bin=''
+    sudo_bin=$(type -P sudo 2>/dev/null || true)
+    [[ -n $sudo_bin ]] || die 'sudo não está instalado; instale sudo e configure seu usuário'
     if (( DRY_RUN )); then
         return 0
     fi
-    if ! command sudo -v; then
+    if ! "$sudo_bin" -v; then
         die 'sudo negado; confirme que seu usuário tem permissão administrativa'
     fi
 }

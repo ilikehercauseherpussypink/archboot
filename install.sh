@@ -62,7 +62,9 @@ bootstrap_project() {
 
     script_path=${BASH_SOURCE[0]:-}
     if [[ -n $script_path && -f $script_path ]]; then
-        script_dir=$(cd -- "$(dirname -- "$script_path")" && pwd)
+        script_dir=${script_path%/*}
+        [[ $script_dir == "$script_path" ]] && script_dir=.
+        script_dir=$(cd -- "$script_dir" && pwd)
         if [[ -d $script_dir/lib && -d $script_dir/apps && -d $script_dir/services ]]; then
             ARCHBOOT_ROOT=$script_dir
             export ARCHBOOT_ROOT
@@ -505,6 +507,9 @@ main() {
     parse_args "$@"
     collect_disabled_features
 
+    if [[ $CI_MODE != 0 && $CI_MODE != 1 ]]; then
+        die 'ARCHBOOT_CI deve ser 0 ou 1'
+    fi
     if [[ $CI_MODE == 1 && $DRY_RUN != 1 && $PLAN_ONLY != 1 && $DOCTOR_ONLY != 1 ]]; then
         die 'ARCHBOOT_CI=1 exige --dry-run, --plan ou --doctor'
     fi
