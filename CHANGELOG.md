@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-* Reworked README with a cleaner personal layout.
+* Replaced the README with a short English front page.
 * Moved verbose documentation out of the main README.
-* Added compact project overview and command-focused usage.
+* Added stricter documentation checks to prevent Portuguese/manual-style drift.
 * Fixed SSH key generation prompt handling when running through `curl | bash`.
 * Added Sober Roblox launcher as a default Flatpak app.
 * Added Flatpak games category.

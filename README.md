@@ -1,43 +1,38 @@
-<div align="center">
+# archboot
 
-# 〖 archboot 〗
+Personal Arch Linux bootstrap.
 
-personal Arch Linux bootstrap<br>
-apps / dev tools / ssh / github / codex / services
+It installs my default apps, configures Flatpak/AUR, prepares dev tooling, sets up Codex, Git, SSH, GitHub keys, and enables a few services.
 
-[![check](https://github.com/ilikehercauseherpussypink/archboot/actions/workflows/check.yml/badge.svg)](https://github.com/ilikehercauseherpussypink/archboot/actions/workflows/check.yml)
-[![license](https://img.shields.io/badge/license-MIT-111111.svg)](LICENSE)
-[![shell](https://img.shields.io/badge/shell-bash-111111.svg)](install.sh)
+This is not a distro installer.
+This is not a universal framework.
+This is just my repeatable Arch setup.
 
-<br>
-<code>curl -fsSL https://shelies.org | bash</code>
-
-</div>
-
-## // what is this
-
-`archboot` is my personal Arch Linux bootstrap. It installs my usual stack, wires up Flatpak/AUR, Codex, Git, SSH, GitHub and services, then stays out of the way. It follows main; it is not a distro installer or a universal framework.
-
-## // install
+## install
 
 ```bash
 curl -fsSL https://shelies.org | bash
 ```
 
+Check the machine first:
+
 ```bash
-# check the machine without changing it
 curl -fsSL https://shelies.org | bash -s -- --doctor
+```
 
-# preview actions
+Preview changes:
+
+```bash
 curl -fsSL https://shelies.org | bash -s -- --dry-run
+```
 
-# inspect the package and service plan
+Show the plan:
+
+```bash
 curl -fsSL https://shelies.org | bash -s -- --plan
 ```
 
-Run `--doctor` first when the machine is new or questionable.
-
-## // audit first
+## audit first
 
 ```bash
 curl -fsSL https://shelies.org -o install.sh
@@ -46,31 +41,22 @@ bash install.sh --dry-run
 bash install.sh
 ```
 
-Piping is convenient. Downloading and reading the script first is safer.
+## defaults
 
-## // what it does
-
-| Area | What happens |
+| source | packages |
 | --- | --- |
-| pacman | Base, development and system packages |
-| Flatpak | Flathub setup and desktop apps |
-| AUR | paru/yay packages |
-| services | System and user units |
-| Codex | npm prefix at `~/.codex` |
-| Git / SSH | Identity, local key and GitHub registration |
+| pacman | `curl`, `ca-certificates`, `base-devel`, `flatpak`, `git`, `openssh`, `nodejs`, `npm`, `github-cli`, `torbrowser-launcher`, `easyeffects` |
+| Flatpak | Discord, Spotify, Tuta, Bitwarden, Mullvad Browser, Sober |
+| AUR | LibreWolf, Mullvad VPN, Wootility |
+| services | `mullvad-daemon.service` |
 
-## // default stack
+Run Sober:
 
-```text
-pacman   curl ca-certificates base-devel flatpak git openssh nodejs npm github-cli torbrowser-launcher easyeffects
-flatpak  Discord Spotify Tuta Bitwarden Mullvad Browser Sober (org.vinegarhq.Sober)
-aur      LibreWolf Mullvad VPN Wootility
-service  mullvad-daemon.service
+```bash
+flatpak run org.vinegarhq.Sober
 ```
 
-Full package IDs, category files and customization notes live in [docs/APPS.md](docs/APPS.md).
-
-## // layout
+## layout
 
 ```text
 apps/
@@ -83,59 +69,40 @@ services/
 lib/
 scripts/
 cloudflare/
+docs/
 ```
 
-Apps and services are editable files. Empty lines and `# comments` are ignored.
+Apps and services are plain text files.
+Empty lines and `# comments` are ignored.
 
-## // controls
+## flags
 
-| Flag | Meaning |
+| flag | use |
 | --- | --- |
-| `--doctor` | Check the environment only |
-| `--dry-run` | Show actions without changing the system |
-| `--plan` | Show the package and service plan |
-| `--yes` | Safe defaults; no destructive confirmations |
-| `--no-flatpak` | Skip Flatpak and Flathub |
-| `--no-aur` | Skip AUR |
-| `--no-ssh` | Skip SSH and GitHub key flow |
+| `--doctor` | check the machine without changing anything |
+| `--dry-run` | show what would happen |
+| `--plan` | print the app and service plan |
+| `--yes` | use safe non-interactive defaults |
+| `--no-packages` | skip pacman, Flatpak and AUR |
+| `--no-flatpak` | skip Flatpak |
+| `--no-aur` | skip AUR |
+| `--no-ssh` | skip SSH and GitHub key setup |
+| `--no-github` | skip GitHub integration |
+| `--no-codex` | skip Codex setup |
 
-<details>
-<summary>More controls</summary>
+`--yes` is not a destructive yes-to-everything mode. It keeps safe defaults.
 
-`--version`, `--verbose`, `--no-packages`, `--no-pacman`, `--no-services`, `--no-codex`, `--no-git` and `--no-github` are also available. Run `bash install.sh --help` for the complete list.
+## safety
 
-</details>
+* does not remove packages automatically
+* does not delete local SSH keys
+* asks before replacing existing Git, SSH, Codex, GitHub or service state
+* `doctor`, `plan` and `dry-run` are read-only
+* logs are restricted and redacted
+* pacman locks are never removed automatically
+* pipe installs read prompts from `/dev/tty` when available
 
-## // safety model
-
-* No package removals.
-* No local SSH key deletion.
-* Prompts before replacing existing state; Enter keeps it.
-* `--doctor`, `--plan` and `--dry-run` are read-only.
-* Logs are restricted and redact common token/key patterns.
-* The pacman lock is never removed automatically.
-* `--yes` keeps safe defaults instead of forcing replacements.
-
-Details: [docs/SAFETY.md](docs/SAFETY.md).
-
-## // commands I actually use
-
-```bash
-curl -fsSL https://shelies.org | bash -s -- --doctor
-curl -fsSL https://shelies.org | bash -s -- --dry-run
-curl -fsSL https://shelies.org | bash
-flatpak run org.vinegarhq.Sober
-```
-
-## // docs
-
-* [Troubleshooting](docs/TROUBLESHOOTING.md)
-* [Apps and customization](docs/APPS.md)
-* [Safety notes](docs/SAFETY.md)
-* [Changelog](CHANGELOG.md)
-* [Cloudflare Worker](cloudflare/README.md)
-
-## // local dev
+## local
 
 ```bash
 git clone https://github.com/ilikehercauseherpussypink/archboot
@@ -144,6 +111,14 @@ bash scripts/check
 bash install.sh --dry-run
 ```
 
-## // license
+## docs
 
-MIT.
+* [troubleshooting](docs/TROUBLESHOOTING.md)
+* [apps](docs/APPS.md)
+* [safety](docs/SAFETY.md)
+* [cloudflare worker](cloudflare/README.md)
+* [changelog](CHANGELOG.md)
+
+## license
+
+MIT

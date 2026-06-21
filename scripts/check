@@ -2006,9 +2006,8 @@ readme_tokens=(
     'docs/SAFETY.md'
     'CHANGELOG.md'
     'cloudflare/README.md'
-    'personal Arch Linux bootstrap'
-    'It follows main'
-    'MIT.'
+    'Personal Arch Linux bootstrap.'
+    'MIT'
 )
 for token in "${readme_tokens[@]}"; do
     if ! grep -Fq -- "$token" README.md; then
@@ -2026,15 +2025,14 @@ for token in "${cloudflare_readme_tokens[@]}"; do
         docs_fail=1
     fi
 done
-# shellcheck disable=SC2016
 troubleshooting_tokens=(
     'bash -s -- --doctor'
     'https://shelies.org/health'
-    'pacman lock'
+    'Pacman lock'
     'gh auth status'
     'ssh -T git@github.com'
-    'tail -n 120 ~/.local/state/archboot/logs/ARQUIVO.log'
-    '`--yes` também preserva esse default seguro'
+    'tail -n 120 ~/.local/state/archboot/logs/FILE.log'
+    'safe default'
 )
 for token in "${troubleshooting_tokens[@]}"; do
     if ! grep -Fiq "$token" docs/TROUBLESHOOTING.md; then
@@ -2042,7 +2040,11 @@ for token in "${troubleshooting_tokens[@]}"; do
         docs_fail=1
     fi
 done
-if ! grep -Fq '<code>curl -fsSL https://shelies.org | bash</code>' README.md; then
+if [[ $(head -n 1 README.md) != '# archboot' ]]; then
+    error 'README.md não começa com # archboot'
+    docs_fail=1
+fi
+if ! grep -Fq 'curl -fsSL https://shelies.org | bash' README.md; then
     error 'README.md não prioriza o domínio curto no quick start'
     docs_fail=1
 fi
@@ -2066,6 +2068,63 @@ for heading in "${legacy_readme_headings[@]}"; do
         error "README.md contém seção antiga duplicada: $heading"
         docs_fail=1
     fi
+done
+readme_forbidden=(
+    'Bootstrap modular para Arch Linux'
+    'Uso rápido'
+    'Instalação'
+    'Aplicativos'
+    'Serviços'
+    'Configuração'
+    'Diagnóstico'
+    'Documentação'
+    '〖'
+    '〗'
+    '•'
+    '·'
+    '<div align='
+    'img.shields.io'
+    'badge.svg'
+)
+for token in "${readme_forbidden[@]}"; do
+    if grep -Fq -- "$token" README.md; then
+        error "README.md contém conteúdo visual ou português proibido: $token"
+        docs_fail=1
+    fi
+done
+readme_lines=$(wc -l <README.md)
+if (( readme_lines > 170 )); then
+    error "README.md excede o limite de 170 linhas: $readme_lines"
+    docs_fail=1
+fi
+if ! grep -Fq '# Troubleshooting' docs/TROUBLESHOOTING.md \
+    || ! grep -Fq '# Cloudflare Worker' cloudflare/README.md; then
+    error 'docs de troubleshooting ou Cloudflare não estão em inglês'
+    docs_fail=1
+fi
+portuguese_prose=(
+    'Comece pelo'
+    'Use o plano'
+    'sem alterar'
+    'O Worker'
+    'Instale '
+    'Crie a'
+    'Edite '
+    'Depois publique'
+    'Nenhuma secret'
+    'Faça o deploy'
+    'Configure '
+    'Não execute'
+    'Confira '
+    'Cada instalação'
+)
+for markdown_file in docs/TROUBLESHOOTING.md cloudflare/README.md docs/APPS.md docs/SAFETY.md CHANGELOG.md; do
+    for token in "${portuguese_prose[@]}"; do
+        if grep -Fq -- "$token" "$markdown_file"; then
+            error "$markdown_file contém prosa em português: $token"
+            docs_fail=1
+        fi
+    done
 done
 for markdown_file in README.md cloudflare/README.md docs/TROUBLESHOOTING.md docs/APPS.md docs/SAFETY.md; do
     if ! awk '/^```/ { open = !open } END { exit open ? 1 : 0 }' "$markdown_file"; then

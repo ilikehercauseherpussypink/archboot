@@ -1,72 +1,43 @@
 # Cloudflare Worker
 
-O Worker publica o `install.sh` do GitHub por um domínio curto, sem alterar o conteúdo e sem executar lógica de instalação.
+The Worker serves `install.sh` from GitHub through a short domain. It does not modify the script or run installer logic.
 
 * Custom domain: `https://shelies.org`
 * Worker URL: `https://archboot.jocaluvero.workers.dev`
-* Upstream: `https://github.com/ilikehercauseherpussypink/archboot`
+* Upstream repository: `https://github.com/ilikehercauseherpussypink/archboot`
 
-O Worker não contém segredos. `OWNER`, `REPO` e `BRANCH` vêm das variáveis do Worker ou dos defaults definidos em `worker.js`. Query strings não alteram esses valores.
+The Worker has no secrets. `OWNER`, `REPO`, and `BRANCH` come from Worker variables or the defaults in `worker.js`. Query strings cannot change them.
 
 ## Endpoints
 
-Health check:
-
 ```bash
 curl -fsSL https://shelies.org/health
-```
-
-Validar o script servido:
-
-```bash
 curl -fsSL https://shelies.org -o /tmp/archboot-install.sh
 head -n 20 /tmp/archboot-install.sh
-```
-
-Dry-run:
-
-```bash
 curl -fsSL https://shelies.org | bash -s -- --dry-run
-```
-
-Instalação direta:
-
-```bash
 curl -fsSL https://shelies.org | bash
 ```
 
-O mesmo script também está disponível em `/install.sh` e pela URL direta do Worker.
+The same script is also available at `/install.sh` and from the Worker URL.
 
 ## Deploy with Wrangler
-
-Instale e autentique o Wrangler:
 
 ```bash
 npm install -g wrangler
 wrangler login
-```
-
-Crie a configuração local:
-
-```bash
 cp cloudflare/wrangler.toml.example cloudflare/wrangler.toml
-```
-
-Edite `OWNER`, `REPO`, `BRANCH` e `pattern`. Depois publique:
-
-```bash
 cd cloudflare
 wrangler deploy
 ```
 
-`cloudflare/wrangler.toml` é ignorado pelo Git. O arquivo `.example` permanece como modelo versionado.
+Edit `OWNER`, `REPO`, `BRANCH`, and `pattern` in `wrangler.toml` first. The real `cloudflare/wrangler.toml` is ignored by Git; the example file remains versioned.
 
-## Deploy with Cloudflare Dashboard
+## Deploy with the Cloudflare Dashboard
 
-1. Crie ou abra um Worker no dashboard da Cloudflare.
-2. Cole o conteúdo de `worker.js` no editor.
-3. Configure `OWNER`, `REPO` e `BRANCH` em Variables and Secrets como texto comum.
-4. Faça o deploy.
-5. Associe `shelies.org` em Settings, Domains & Routes, Custom Domains.
+1. Create or open a Worker in the Cloudflare dashboard.
+2. Paste `worker.js` into the editor.
+3. Set `OWNER`, `REPO`, and `BRANCH` as plain Worker variables.
+4. Deploy the Worker.
+5. Add `shelies.org` under Settings, Domains & Routes, Custom Domains.
 
-Nenhuma secret é necessária para acessar um repositório público.
+No secret is required for a public repository.
