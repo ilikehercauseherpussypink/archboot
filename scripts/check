@@ -2006,7 +2006,10 @@ readme_tokens=(
     'docs/SAFETY.md'
     'CHANGELOG.md'
     'cloudflare/README.md'
-    'Personal Arch Linux bootstrap for my apps'
+    'A personal Arch Linux bootstrap built around repeatability'
+    '## why'
+    '## highlights'
+    '## architecture'
     'MIT'
 )
 for token in "${readme_tokens[@]}"; do
@@ -2071,6 +2074,9 @@ legacy_readme_headings=(
     '## Mullvad'
     '## Uninstall notes'
     '## Security notes'
+    '## What it handles'
+    '## Project layout'
+    '## Quick commands'
 )
 for heading in "${legacy_readme_headings[@]}"; do
     if grep -Fq "$heading" README.md; then

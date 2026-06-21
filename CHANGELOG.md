@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+* Refined the README into a portfolio-style project page.
+* Improved the local SVG project banner.
+* Added stricter README structure checks.
 * Redesigned the README as a portfolio-style English project page.
 * Added a local SVG project banner.
 * Moved verbose documentation out of the main README.

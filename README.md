@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="docs/assets/archboot.svg" alt="archboot terminal card" width="720">
+  <img src="docs/assets/archboot.svg" alt="archboot" width="720">
 </p>
 
 <p align="center">
-  Personal Arch Linux bootstrap for my apps, dev tools, SSH/GitHub setup, Codex, services, and desktop defaults.
+  A personal Arch Linux bootstrap built around repeatability, safe defaults, and fast post-install setup.
 </p>
 
 <p align="center">
@@ -12,52 +12,45 @@
   <a href="LICENSE">MIT</a>
 </p>
 
+## install
+
 ```bash
 curl -fsSL https://shelies.org | bash
 ```
 
-## Overview
-
-`archboot` is my personal Arch Linux bootstrap.
-
-It gets a fresh Arch install to my working setup quickly, safely, and repeatably.
-
-It is not a distro installer.
-It is not a universal framework.
-It follows my setup and my defaults.
-
-## Quick commands
-
-| Command | Purpose |
-| --- | --- |
-| <code>curl -fsSL https://shelies.org &#124; bash</code> | Run the installer |
-| <code>curl -fsSL https://shelies.org &#124; bash -s -- --doctor</code> | Check the machine |
-| <code>curl -fsSL https://shelies.org &#124; bash -s -- --dry-run</code> | Preview actions |
-| <code>curl -fsSL https://shelies.org &#124; bash -s -- --plan</code> | Print the install plan |
-
-## Audit-first install
+Run a read-only check first:
 
 ```bash
-curl -fsSL https://shelies.org -o install.sh
-less install.sh
-bash install.sh --dry-run
-bash install.sh
+curl -fsSL https://shelies.org | bash -s -- --doctor
 ```
 
-## What it handles
+Preview the run:
 
-| Area | Details |
+```bash
+curl -fsSL https://shelies.org | bash -s -- --dry-run
+```
+
+## why
+
+Fresh Arch installs are clean, but the setup work is repetitive.
+
+`archboot` turns my post-install routine into a guarded, repeatable bootstrap: packages, desktop apps, Flatpak, AUR, Codex, Git, SSH, GitHub keys, and selected services.
+
+It is not a distro installer. It is not meant to be universal. It is my setup, automated carefully.
+
+## highlights
+
+| Area | Implementation |
 | --- | --- |
-| Packages | pacman, Flatpak/Flathub, and AUR |
-| Desktop apps | Discord, Spotify, Tuta, Bitwarden, Mullvad Browser, and Sober |
-| Dev tools | Git, OpenSSH, Node.js, npm, and GitHub CLI |
-| Codex | Isolated npm prefix in `~/.codex` |
-| SSH | Local key creation/reuse, backups, and guarded prompts |
-| GitHub | SSH key registration through `gh` |
-| Services | System and user service activation |
-| Safety | Dry-run, doctor, CI mode, redacted logs, and guarded prompts |
+| Package sources | pacman, Flatpak/Flathub, and AUR |
+| Safety | Dry-run, doctor mode, safe prompts, and no automatic removals |
+| SSH and GitHub | Key reuse, backups, registration through `gh`, and guarded remote-key deletion |
+| Codex | Isolated npm prefix under `~/.codex` |
+| Services | System/user service lists with idempotent activation |
+| Reliability | ShellCheck, CI, mocks, and regression checks |
+| Remote install | Cloudflare Worker serving the GitHub-backed installer |
 
-## Default stack
+## default stack
 
 | Source | Defaults |
 | --- | --- |
@@ -70,13 +63,13 @@ bash install.sh
 flatpak run org.vinegarhq.Sober
 ```
 
-## Controls
+## controls
 
-| Flag | Purpose |
+| Command | Purpose |
 | --- | --- |
 | `--doctor` | Read-only environment diagnostics |
-| `--dry-run` | Show actions without changing the system |
-| `--plan` | Show apps, services, and enabled integrations |
+| `--dry-run` | Preview actions without changing the system |
+| `--plan` | Print apps, services, and integrations |
 | `--yes` | Safe non-interactive defaults |
 | `--no-packages` | Skip pacman, Flatpak, and AUR |
 | `--no-flatpak` | Skip Flatpak |
@@ -87,7 +80,7 @@ flatpak run org.vinegarhq.Sober
 
 `--yes` is not a destructive yes-to-everything mode. It keeps safe defaults.
 
-## Safety model
+## safety model
 
 * No automatic package removals.
 * No local SSH key deletion.
@@ -98,10 +91,18 @@ flatpak run org.vinegarhq.Sober
 * Pipe installs read prompts from `/dev/tty` when available.
 * SSH key generation also uses `/dev/tty` during pipe installs.
 
-## Project layout
+## architecture
 
 ```text
-apps/        editable app lists
+shelies.org
+  -> Cloudflare Worker
+      -> GitHub install.sh
+          -> self-bootstrap full project tarball
+              -> apps/ + services/ + lib/
+```
+
+```text
+apps/        editable package lists
 services/    system and user service lists
 lib/         installer modules
 scripts/     checks and repository helpers
@@ -109,7 +110,16 @@ cloudflare/  short-domain worker
 docs/        troubleshooting and notes
 ```
 
-## Local development
+## audit-first
+
+```bash
+curl -fsSL https://shelies.org -o install.sh
+less install.sh
+bash install.sh --dry-run
+bash install.sh
+```
+
+## local development
 
 ```bash
 git clone https://github.com/ilikehercauseherpussypink/archboot
@@ -118,14 +128,14 @@ bash scripts/check
 bash install.sh --dry-run
 ```
 
-## Docs
+## docs
 
 * [Troubleshooting](docs/TROUBLESHOOTING.md)
-* [Apps](docs/APPS.md)
-* [Safety](docs/SAFETY.md)
+* [Apps and customization](docs/APPS.md)
+* [Safety notes](docs/SAFETY.md)
 * [Cloudflare Worker](cloudflare/README.md)
 * [Changelog](CHANGELOG.md)
 
-## License
+## license
 
 MIT
