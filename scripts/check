@@ -215,6 +215,7 @@ else
     error 'default LEANIN_REPO não aponta para ilikehercauseherpussypink/leanin'
     ((failures += 1))
 fi
+# shellcheck disable=SC2016
 if ! rg -n 'ARCHBOOT_(REPO|BRANCH|BOOTSTRAPPED|ROOT|STATE_DIR|LOG_DIR|VERSION)' \
     install.sh lib docs README.md >/dev/null 2>&1 \
     && grep -Fq 'CI_MODE=${LEANIN_CI:-${ARCHBOOT_CI:-0}}' install.sh; then
