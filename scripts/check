@@ -264,6 +264,12 @@ if grep -REn '(chmod|chown)[[:space:]]+(-[[:alnum:]]*R|--recursive)' \
 else
     ok 'nenhum chmod/chown recursivo encontrado'
 fi
+if grep -Fq 'https://archlinux.org/ >/dev/null 2>&1' lib/env; then
+    ok 'preflight de internet não vaza saída crua do curl'
+else
+    error 'preflight de internet pode vazar saída crua do curl'
+    ((failures += 1))
+fi
 if grep -REn 'curl[^|]*\|[[:space:]]*(bash|sh)|wget[^|]*\|[[:space:]]*(bash|sh)' \
     install.sh lib scripts/github .github cloudflare/worker.js >/dev/null 2>&1; then
     error 'pipe remoto para shell encontrado no código executável'
@@ -989,7 +995,7 @@ fi
 
 if default_dry_output=$(LEANIN_CI=1 bash install.sh --dry-run --no-ssh --no-github 2>&1) \
     && grep -Fq '> Etapa 10/10: resumo' <<<"$default_dry_output" \
-    && grep -Fq '> [ok] concluído' <<<"$default_dry_output"; then
+    && grep -Fq '> [ok] dry-run concluído' <<<"$default_dry_output"; then
     ok 'dry-run sem flags de fonte conclui todas as etapas ativas'
 else
     error 'dry-run sem flags de fonte encerrou antes do resumo'
@@ -1048,6 +1054,25 @@ else
     controls_fail=1
 fi
 
+if no_github_output=$(LEANIN_CI=1 bash install.sh --dry-run --no-packages --no-services --no-codex --no-git --no-github 2>&1) \
+    && grep -Fq '[skip] GitHub desativado por flag' <<<"$no_github_output" \
+    && grep -Fq '> Etapa 3/4: SSH' <<<"$no_github_output" \
+    && ! grep -Fq '> Etapa 4/4: GitHub' <<<"$no_github_output"; then
+    ok '--no-github pula somente a integração GitHub'
+else
+    error '--no-github também pulou SSH ou manteve etapa GitHub'
+    controls_fail=1
+fi
+
+if help_output=$(bash install.sh --help 2>&1) \
+    && grep -Fq 'Uso: bash install.sh [opções]' <<<"$help_output" \
+    && ! grep -Fq 'baixando projeto completo' <<<"$help_output"; then
+    ok '--help encerra antes do bootstrap remoto'
+else
+    error '--help tentou bootstrap ou não mostrou a ajuda'
+    controls_fail=1
+fi
+
 if LEANIN_CI=1 bash install.sh >/dev/null 2>&1; then
     error 'LEANIN_CI=1 permitiu execução sem --dry-run/--plan'
     controls_fail=1
@@ -1063,7 +1088,8 @@ fi
 
 # A expressão é intencionalmente literal para validar o código-fonte.
 # shellcheck disable=SC2016
-if grep -Fq 'if (( failure_count == 0 )); then' install.sh \
+if grep -Fq 'elif (( DRY_RUN )); then' install.sh \
+    && grep -Fq "ok 'dry-run concluído'" install.sh \
     && grep -Fq 'error "concluído com $failure_count falha(s)"' install.sh \
     && grep -Fq 'summary_counts pacman' install.sh \
     && grep -Fq 'summary_counts serviços' install.sh; then
@@ -1351,6 +1377,15 @@ ssh_add_log="$ssh_test_home/ssh-add.log"
 mkdir -p "$fake_bin"
 cat >"$fake_bin/ssh-add" <<'EOF'
 #!/usr/bin/env bash
+if [[ -n ${SSH_ADD_MARKER:-} ]]; then
+    exec 3>>"$SSH_ADD_MARKER"
+    printf 'askpass=%s require=%s\n' "${SSH_ASKPASS-unset}" "${SSH_ASKPASS_REQUIRE-unset}" >&3
+    for fd in 0 1 2; do
+        printf 'fd%s=' "$fd" >&3
+        readlink "/proc/$$/fd/$fd" >&3
+    done
+    exec 3>&-
+fi
 printf 'Identity added: %s (mock)\n' "${1:-unknown}"
 EOF
 chmod +x "$fake_bin/ssh-add"
@@ -1374,10 +1409,42 @@ if ssh_add_output=$(HOME="$ssh_test_home" PATH="$fake_bin:$PATH" SSH_AUTH_SOCK=m
     ' _ "$ssh_add_log" 2>&1) \
     && ! grep -Fq 'Identity added:' <<<"$ssh_add_output" \
     && ! grep -Fq 'ssh-keygen' <<<"$ssh_add_output" \
-    && grep -Fq 'Identity added:' "$ssh_add_log"; then
-    ok 'chave SSH existente é mantida e ssh-add fica silencioso'
+    && grep -Fq 'não há terminal disponível para adicionar a chave ao ssh-agent' <<<"$ssh_add_output" \
+    && [[ ! -e $ssh_add_log ]]; then
+    ok 'chave SSH existente é mantida sem chamar ssh-add fora do terminal'
 else
-    error 'chave SSH existente foi refeita ou ssh-add vazou saída bruta'
+    error 'chave SSH existente foi refeita ou ssh-add ignorou o terminal'
+    ((failures += 1))
+fi
+
+ssh_add_tty="$ssh_test_home/ssh-add.tty"
+ssh_add_marker="$ssh_test_home/ssh-add.marker"
+: >"$ssh_add_tty"
+: >"$ssh_add_marker"
+if ssh_add_tty_output=$(HOME="$ssh_test_home" PATH="$fake_bin:$PATH" SSH_AUTH_SOCK=mock \
+    SSH_ADD_MARKER="$ssh_add_marker" TTY_FILE="$ssh_add_tty" bash -c '
+        set -Eeuo pipefail
+        source lib/log
+        source lib/ask
+        source lib/env
+        source lib/run
+        source lib/ssh
+        DRY_RUN=0
+        VERBOSE=0
+        LOG_FILE=/dev/null
+        FAILURES=()
+        GIT_EMAIL=mock@example
+        _ssh_tty_path() { printf "%s" "$TTY_FILE"; }
+        configure_ssh
+    ' 2>&1) \
+    && ! grep -Fq 'Identity added:' <<<"$ssh_add_tty_output" \
+    && grep -Fqx 'askpass= require=never' "$ssh_add_marker" \
+    && grep -Fqx "fd0=$ssh_add_tty" "$ssh_add_marker" \
+    && grep -Fqx "fd1=$ssh_add_tty" "$ssh_add_marker" \
+    && grep -Fqx "fd2=$ssh_add_tty" "$ssh_add_marker"; then
+    ok 'ssh-add usa terminal dedicado e neutraliza askpass'
+else
+    error 'ssh-add não isolou a passphrase no terminal'
     ((failures += 1))
 fi
 
@@ -1508,7 +1575,8 @@ fi
 # A expressão precisa permanecer literal para validar os redirecionamentos.
 # shellcheck disable=SC2016
 if grep -Fq 'SSH_ASKPASS_REQUIRE=never' lib/ssh \
-    && grep -Fq '<"$tty" >"$tty" 2>"$tty"' lib/ssh; then
+    && grep -Fq 'exec {fd}<>"$tty"' lib/ssh \
+    && grep -Fq '<&"$fd" >&"$fd" 2>&"$fd"' lib/ssh; then
     ok 'geração SSH redireciona descritores para o terminal e neutraliza askpass'
 else
     error 'geração SSH não isola ssh-keygen do stdin do pipe'
@@ -2009,12 +2077,49 @@ else
     ((failures += 1))
 fi
 
-if grep -Fq 'gh auth login -h github.com -p ssh -s admin:public_key' lib/gh \
+github_clipboard_capability_mock() {
+    local support=$1 marker="$ssh_test_home/github-clipboard-$1"
+    : >"$marker"
+    HOME="$ssh_test_home" SUPPORT="$support" MARKER="$marker" bash -c '
+        set -Eeuo pipefail
+        source lib/log
+        source lib/gh
+        LOG_FILE=/dev/null
+        VERBOSE=0
+        gh() {
+            printf "%s\n" "$*" >>"$MARKER"
+            [[ $1 == auth && $3 == --help && $SUPPORT == yes ]] && printf "%s\n" --clipboard
+        }
+        _github_run_auth_interactive() {
+            printf "run:%s\n" "$*" >>"$MARKER"
+            return 1
+        }
+        _github_login_with_ssh_permissions || true
+        _github_refresh_ssh_key_permissions || true
+    ' >/dev/null 2>&1 \
+        && grep -Fq 'auth login --help' "$marker" \
+        && grep -Fq 'auth refresh --help' "$marker"
+}
+
+if github_clipboard_capability_mock yes \
+    && grep -Fq 'run:autenticação GitHub gh auth login -h github.com -p ssh -s admin:public_key --web --clipboard' "$ssh_test_home/github-clipboard-yes" \
+    && grep -Fq 'run:atualização de permissões GitHub gh auth refresh -h github.com -s admin:public_key --clipboard' "$ssh_test_home/github-clipboard-yes" \
+    && github_clipboard_capability_mock no \
+    && grep -Fq 'run:autenticação GitHub gh auth login -h github.com -p ssh -s admin:public_key --web' "$ssh_test_home/github-clipboard-no" \
+    && grep -Fq 'run:atualização de permissões GitHub gh auth refresh -h github.com -s admin:public_key' "$ssh_test_home/github-clipboard-no" \
+    && ! grep -Fq -- '--clipboard' "$ssh_test_home/github-clipboard-no"; then
+    ok 'GitHub usa clipboard somente quando a versão instalada o suporta'
+else
+    error 'fallback de clipboard GitHub não detecta suporte com segurança'
+    ((failures += 1))
+fi
+
+if grep -Fq 'gh auth login -h github.com -p ssh -s admin:public_key --web' lib/gh \
     && grep -Fq 'gh auth refresh -h github.com -s admin:public_key' lib/gh \
-    && grep -Fq 'admin:public_key --web --clipboard' lib/gh \
-    && grep -Fq 'admin:public_key --clipboard' lib/gh \
+    && grep -Fq '_github_auth_supports_clipboard' lib/gh \
     && grep -Fq 'timeout 600' lib/gh \
-    && grep -Fq "<\"\$tty\" >\"\$tty\" 2>\"\$tty\"" lib/gh \
+    && grep -Fq 'exec {fd}<>"$tty"' lib/gh \
+    && grep -Fq '<&"$fd" >&"$fd" 2>&"$fd"' lib/gh \
     && awk '
         /^_github_refresh_ssh_key_permissions\(\)/ { controlled = 1 }
         controlled && /^}/ { controlled = 0; next }

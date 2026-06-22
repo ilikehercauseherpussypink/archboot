@@ -89,7 +89,8 @@ flatpak run org.vinegarhq.Sober
 * Logs are restricted and redacted.
 * Pacman locks are never removed automatically.
 * Pipe installs read prompts from `/dev/tty` when available.
-* SSH key generation also uses `/dev/tty` during pipe installs.
+* SSH key generation and `ssh-add` use `/dev/tty` during pipe installs, so a passphrase never consumes the pipe input.
+* `--help` and `--version` exit before the repository bootstrap.
 
 ## architecture
 

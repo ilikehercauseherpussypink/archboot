@@ -35,16 +35,25 @@ _github_auth_tty_path() {
 }
 
 _github_auth_tty_available() {
-    local tty=''
+    local tty='' fd
     tty=$(_github_auth_tty_path)
-    [[ -n $tty && -r $tty && -w $tty ]]
+    [[ -n $tty && -e $tty ]] || return 1
+    if ! { exec {fd}<>"$tty"; } 2>/dev/null; then
+        return 1
+    fi
+    exec {fd}>&-
+}
+
+_github_auth_supports_clipboard() {
+    local action=$1
+    gh auth "$action" --help 2>/dev/null | grep -Fq -- '--clipboard'
 }
 
 _github_run_auth_interactive() {
-    local label=$1 tty='' status=0
+    local label=$1 tty='' fd status=0
     shift
     tty=$(_github_auth_tty_path)
-    if [[ -z $tty || ! -r $tty || ! -w $tty ]]; then
+    if [[ -z $tty || ! -e $tty ]] || ! { exec {fd}<>"$tty"; } 2>/dev/null; then
         warn 'não há terminal disponível para autenticação interativa do GitHub'
         return 1
     fi
@@ -56,15 +65,12 @@ _github_run_auth_interactive() {
     (( VERBOSE )) && _print_command "$@"
     set +e
     if command_exists timeout; then
-        # /dev/tty is the interactive terminal, not a regular data file.
-        # shellcheck disable=SC2094
-        timeout 600 "$@" <"$tty" >"$tty" 2>"$tty"
+        timeout 600 "$@" <&"$fd" >&"$fd" 2>&"$fd"
     else
-        # /dev/tty is the interactive terminal, not a regular data file.
-        # shellcheck disable=SC2094
-        "$@" <"$tty" >"$tty" 2>"$tty"
+        "$@" <&"$fd" >&"$fd" 2>&"$fd"
     fi
     status=$?
+    exec {fd}>&-
     set -e
     info 'GitHub CLI retornou; verificando permissões'
     if (( status == 124 )); then
@@ -81,23 +87,19 @@ _github_run_auth_interactive() {
 }
 
 _github_login_with_ssh_permissions() {
-    if _github_run_auth_interactive 'autenticação GitHub' \
-        gh auth login -h github.com -p ssh -s admin:public_key --web --clipboard; then
-        return 0
+    local -a command=(gh auth login -h github.com -p ssh -s admin:public_key --web)
+    if _github_auth_supports_clipboard login; then
+        command+=(--clipboard)
     fi
-    info 'tentando autenticação GitHub sem clipboard'
-    _github_run_auth_interactive 'autenticação GitHub' \
-        gh auth login -h github.com -p ssh -s admin:public_key --web
+    _github_run_auth_interactive 'autenticação GitHub' "${command[@]}"
 }
 
 _github_refresh_ssh_key_permissions() {
-    if _github_run_auth_interactive 'atualização de permissões GitHub' \
-        gh auth refresh -h github.com -s admin:public_key --clipboard; then
-        return 0
+    local -a command=(gh auth refresh -h github.com -s admin:public_key)
+    if _github_auth_supports_clipboard refresh; then
+        command+=(--clipboard)
     fi
-    info 'tentando atualização de permissões sem clipboard'
-    _github_run_auth_interactive 'atualização de permissões GitHub' \
-        gh auth refresh -h github.com -s admin:public_key
+    _github_run_auth_interactive 'atualização de permissões GitHub' "${command[@]}"
 }
 
 _github_gh_ready() {

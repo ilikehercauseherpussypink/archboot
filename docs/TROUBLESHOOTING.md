@@ -110,7 +110,7 @@ curl -fsSL https://shelies.org | bash
 ssh -T git@github.com
 ```
 
-`admin:public_key` is required because leanin can list, add, and optionally remove old SSH keys. The installer binds GitHub authentication prompts to `/dev/tty`, so `curl | bash` never feeds its input to `gh`.
+`admin:public_key` is required because leanin can list, add, and optionally remove old SSH keys. The installer binds GitHub authentication prompts to `/dev/tty`, so `curl | bash` never feeds its input to `gh`. It uses `--clipboard` only when the installed GitHub CLI advertises that option; an unavailable clipboard does not restart or fail the device-code flow.
 
 Local keys stay in `~/.ssh`. If automatic registration cannot continue, manual registration at <https://github.com/settings/keys> remains safe: add the public `.pub` key shown by the installer, then run the SSH test above. Local SSH files are never deleted.
 

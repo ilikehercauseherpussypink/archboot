@@ -36,13 +36,15 @@ initial_banner() {
 EARLY_PLAN=0
 EARLY_VERSION=0
 EARLY_VERBOSE=0
+EARLY_HELP=0
 for argument in "$@"; do
     case $argument in
         --version) EARLY_VERSION=1 ;;
         --plan) EARLY_PLAN=1 ;;
         --verbose) EARLY_VERBOSE=1 ;;
         --doctor|--dry-run|--yes|--no-packages|--no-pacman|--no-flatpak|--no-aur|\
-            --no-services|--no-codex|--no-git|--no-ssh|--no-github|--help|-h) ;;
+            --no-services|--no-codex|--no-git|--no-ssh|--no-github) ;;
+        --help|-h) EARLY_HELP=1 ;;
         *)
             printf '> [error] opção desconhecida: %s\n' "$argument" >&2
             exit 2
@@ -54,6 +56,30 @@ if (( EARLY_VERSION )); then
         while IFS= read -r _; do :; done
     fi
         printf 'leanin %s\n' "$LEANIN_VERSION"
+    exit 0
+fi
+
+if (( EARLY_HELP )); then
+    cat <<'EOF'
+Uso: bash install.sh [opções]
+
+  --dry-run       mostra ações sem alterar o sistema
+  --verbose       mostra comandos e saída completa
+  --plan          mostra somente o plano resumido
+  --doctor        verifica o ambiente sem alterar o sistema
+  --version       mostra a versão instalada
+  --yes           usa defaults seguros sem prompts
+  --no-packages   pula pacman, Flatpak e AUR
+  --no-pacman     pula pacotes pacman
+  --no-flatpak    pula Flatpak, Flathub e seus apps
+  --no-aur        pula AUR helper e pacotes AUR
+  --no-services   pula serviços system e user
+  --no-codex      pula Codex CLI
+  --no-git        pula identidade e preferências Git
+  --no-ssh        pula SSH local e integração GitHub SSH
+  --no-github     pula integração e autenticação GitHub
+  --help          mostra esta ajuda
+EOF
     exit 0
 fi
 
@@ -375,6 +401,7 @@ show_plan_only() {
     load_plan
 
     printf 'plano\n\n'
+    printf 'pacotes\n'
     if (( SKIP_PACMAN )); then
         info "pacman: desativado ($(count_apps pacman) configurados)"
     else
@@ -390,6 +417,7 @@ show_plan_only() {
     else
         plan_count AUR "$(count_apps aur)" pacote pacotes
     fi
+    printf '\nserviços\n'
     if (( SKIP_SERVICES )); then
         info "serviços system: desativado (${#SYSTEM_SERVICES[@]} configurados)"
         info "serviços user: desativado (${#USER_SERVICES[@]} configurados)"
@@ -397,6 +425,7 @@ show_plan_only() {
         plan_count 'serviços system' "${#SYSTEM_SERVICES[@]}" serviço serviços
         plan_count 'serviços user' "${#USER_SERVICES[@]}" serviço serviços
     fi
+    printf '\nintegrações\n'
     info "Codex: $(plan_status "$SKIP_CODEX")"
     info "Git: $(plan_status "$SKIP_GIT")"
     if (( SKIP_SSH || SKIP_GITHUB )); then
@@ -534,14 +563,16 @@ show_summary() {
     log_list 'service skipped' "${SERVICES_SKIPPED[@]}"
     log_list 'failure' "${FAILURES[@]}"
 
-    if (( failure_count == 0 )); then
+    if (( failure_count > 0 )); then
+        error "concluído com $failure_count falha(s)"
+    elif (( DRY_RUN )); then
+        ok 'dry-run concluído'
+    else
         if (( ! SKIP_GITHUB )) && ! github_ssh_registration_ready; then
             warn 'concluído com etapas manuais'
         else
             ok 'concluído'
         fi
-    else
-        error "concluído com $failure_count falha(s)"
     fi
 
     printf '\npacotes\n'
