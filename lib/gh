@@ -52,8 +52,12 @@ _github_run_auth_interactive() {
     (( VERBOSE )) && _print_command "$@"
     set +e
     if command_exists timeout; then
+        # /dev/tty is the interactive terminal, not a regular data file.
+        # shellcheck disable=SC2094
         timeout 300 "$@" <"$tty" >"$tty" 2>"$tty"
     else
+        # /dev/tty is the interactive terminal, not a regular data file.
+        # shellcheck disable=SC2094
         "$@" <"$tty" >"$tty" 2>"$tty"
     fi
     status=$?

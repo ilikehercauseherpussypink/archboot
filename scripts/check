@@ -2011,7 +2011,7 @@ fi
 
 if grep -Fq 'gh auth login -h github.com -p ssh -s admin:public_key' lib/gh \
     && grep -Fq 'gh auth refresh -h github.com -s admin:public_key' lib/gh \
-    && grep -Fq '<"$tty" >"$tty" 2>"$tty"' lib/gh \
+    && grep -Fq "<\"\$tty\" >\"\$tty\" 2>\"\$tty\"" lib/gh \
     && awk '
         /^_github_refresh_ssh_key_permissions\(\)/ { controlled = 1 }
         controlled && /^}/ { controlled = 0; next }
