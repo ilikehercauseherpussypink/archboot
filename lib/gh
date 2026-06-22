@@ -60,7 +60,9 @@ github_ssh_key_management_ready() {
         GH_SSH_KEY_ADD_READY=1
         GH_SSH_KEY_DELETE_READY=1
         GITHUB_SSH_MANAGEMENT_STATUS='disponível'
-        ok 'GitHub CLI pode gerenciar SSH keys'
+        if (( GH_SSH_KEY_LIST_READY && GH_SSH_KEY_ADD_READY && GH_SSH_KEY_DELETE_READY )); then
+            ok 'GitHub CLI pode listar, cadastrar e remover SSH keys'
+        fi
         return 0
     fi
 

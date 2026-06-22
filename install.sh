@@ -595,6 +595,7 @@ show_summary() {
         info "Git: ${GIT_NAME:-não configurado} <${GIT_EMAIL:-não configurado}>"
         info "chave SSH pública: ${SSH_PUBLIC_KEY:-não configurada}"
         info "GitHub SSH keys antigas: ${GITHUB_OLD_KEYS_STATUS:-não verificadas}"
+        info "permissões GitHub SSH keys: ${GITHUB_SSH_MANAGEMENT_STATUS:-não verificadas}"
         info "título GitHub SSH key: ${GITHUB_KEY_TITLE:-person}"
         info "teste SSH GitHub: ${SSH_GITHUB_RESULT:-não testado}"
     fi
