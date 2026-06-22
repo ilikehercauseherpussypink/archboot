@@ -598,6 +598,7 @@ show_summary() {
         info 'GitHub SSH: desativado por flag'
     else
         info "GitHub SSH: ${GITHUB_NEW_KEY_STATUS:-registro manual pendente}"
+        info "GitHub auth: ${GH_STATE:-gh_unknown}"
     fi
     if (( SKIP_CODEX )); then
         info 'Codex: desativado por flag'
@@ -778,7 +779,7 @@ main() {
             fi
         else
             skip 'GitHub SSH pulado: chave local indisponível'
-            configure_gh || true
+            GITHUB_NEW_KEY_STATUS='chave local indisponível'
         fi
     fi
 

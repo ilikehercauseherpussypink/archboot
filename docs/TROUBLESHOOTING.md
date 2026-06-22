@@ -110,13 +110,15 @@ curl -fsSL https://shelies.org | bash
 ssh -T git@github.com
 ```
 
-`admin:public_key` is required because leanin can list, add, and optionally remove old SSH keys. The installer binds GitHub authentication prompts to `/dev/tty`, so `curl | bash` never feeds its input to `gh`. It uses `--clipboard` only when the installed GitHub CLI advertises that option; an unavailable clipboard does not restart or fail the device-code flow.
+`admin:public_key` is required because leanin can list, add, and optionally remove old SSH keys. During a normal interactive run, leanin starts a supervised authentication worker instead of handing an untracked prompt to the installer. It can open a supported graphical terminal when available, otherwise it uses `/dev/tty`; `curl | bash` never feeds its input to `gh`.
 
 Local keys stay in `~/.ssh`. If automatic registration cannot continue, manual registration at <https://github.com/settings/keys> remains safe: add the public `.pub` key shown by the installer, then run the SSH test above. Local SSH files are never deleted.
 
 ## GitHub authentication looks stuck
 
-During GitHub CLI device authentication, you may see a one-time code and a prompt to press Enter before opening `https://github.com/login/device`. Copy the code, authenticate in the browser, then return to the terminal and press Enter if GitHub CLI is still waiting. leanin attaches GitHub authentication to `/dev/tty`, so it cannot consume the `curl | bash` input stream.
+During GitHub CLI device authentication, you may see a one-time code and a prompt to press Enter before opening `https://github.com/login/device`. Copy the code, authenticate in the browser, then return to the worker terminal and press Enter if GitHub CLI is still waiting. The main installer reports that it is waiting and rechecks key-management access before it registers the local key.
+
+The worker waits for up to 600 seconds by default. Set `LEANIN_GH_AUTH_TIMEOUT` to another positive number of seconds if necessary. A timeout does not kill a terminal emulator; leanin marks GitHub setup as pending and prints the exact next command.
 
 For existing weak scopes:
 

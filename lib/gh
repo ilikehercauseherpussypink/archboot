@@ -4,12 +4,13 @@ GITHUB_KEY_TITLE_DEFAULT='person'
 GITHUB_KEY_TITLE=$GITHUB_KEY_TITLE_DEFAULT
 GITHUB_OLD_KEYS_STATUS='não verificadas'
 GITHUB_NEW_KEY_STATUS='não configurada'
-GH_AUTH_READY=0
-GH_AUTH_JUST_CREATED=0
-GITHUB_SSH_PERMISSIONS_UPGRADED=0
-GH_SSH_KEY_LIST_READY=0
-GH_SSH_KEY_ADD_READY=0
-GH_SSH_KEY_DELETE_READY=0
+GH_STATE='gh_unknown'
+GH_AUTH_WORKER_DIR=''
+GH_AUTH_WORKER_SCRIPT=''
+GH_AUTH_WORKER_STATUS=''
+GH_AUTH_WORKER_LOG=''
+GH_AUTH_WORKER_LAUNCH=''
+GH_AUTH_WORKER_PID=''
 # Read by the installer summary after this module is sourced.
 # shellcheck disable=SC2034
 GITHUB_SSH_MANAGEMENT_STATUS='não verificada'
@@ -44,129 +45,217 @@ _github_auth_tty_available() {
     exec {fd}>&-
 }
 
-_github_auth_supports_clipboard() {
-    local action=$1
-    gh auth "$action" --help 2>/dev/null | grep -Fq -- '--clipboard'
-}
-
-_github_run_auth_interactive() {
-    local label=$1 tty='' fd status=0
-    shift
-    tty=$(_github_auth_tty_path)
-    if [[ -z $tty || ! -e $tty ]] || ! { exec {fd}<>"$tty"; } 2>/dev/null; then
-        warn 'não há terminal disponível para autenticação interativa do GitHub'
-        return 1
-    fi
-    info 'o GitHub pode abrir um fluxo de autenticação no navegador'
-    info 'se aparecer um código único, copie, autentique e volte para este terminal'
-    info 'se o GitHub CLI pedir Enter, pressione Enter neste terminal'
-    info 'transferindo o controle para o GitHub CLI...'
-    _log_command "$@"
-    (( VERBOSE )) && _print_command "$@"
-    set +e
-    if command_exists timeout; then
-        timeout 600 "$@" <&"$fd" >&"$fd" 2>&"$fd"
-    else
-        "$@" <&"$fd" >&"$fd" 2>&"$fd"
-    fi
-    status=$?
-    exec {fd}>&-
-    set -e
-    info 'GitHub CLI retornou; verificando permissões'
-    if (( status == 124 )); then
-        warn 'autenticação GitHub não terminou a tempo'
-        if [[ $label == 'autenticação GitHub' ]]; then
-            info 'execute manualmente: gh auth login -h github.com -p ssh -s admin:public_key'
-        else
-            info 'execute manualmente: gh auth refresh -h github.com -s admin:public_key'
-        fi
-    elif (( status != 0 )); then
-        warn "$label falhou"
-    fi
-    return "$status"
-}
-
-_github_login_with_ssh_permissions() {
-    local -a command=(gh auth login -h github.com -p ssh -s admin:public_key --web)
-    if _github_auth_supports_clipboard login; then
-        command+=(--clipboard)
-    fi
-    _github_run_auth_interactive 'autenticação GitHub' "${command[@]}"
-}
-
-_github_refresh_ssh_key_permissions() {
-    local -a command=(gh auth refresh -h github.com -s admin:public_key)
-    if _github_auth_supports_clipboard refresh; then
-        command+=(--clipboard)
-    fi
-    _github_run_auth_interactive 'atualização de permissões GitHub' "${command[@]}"
-}
-
-_github_gh_ready() {
+leanin_gh_state() {
+    # gh also honors GH_TOKEN/GITHUB_TOKEN, so token-based automation never needs this worker.
     if ! command_exists gh; then
-        warn 'GitHub CLI indisponível; cadastro automático não será usado'
-        info 'para autenticar depois: gh auth login -h github.com -s admin:public_key'
-        return 1
+        GH_STATE='gh_missing'
+    elif ! gh auth status >/dev/null 2>&1; then
+        GH_STATE='gh_unauthenticated'
+    elif gh ssh-key list >/dev/null 2>&1; then
+        GH_STATE='gh_key_management_available'
+        GITHUB_SSH_MANAGEMENT_STATUS='disponível'
+    else
+        GH_STATE='gh_authenticated_no_key_scope'
+        GITHUB_SSH_MANAGEMENT_STATUS='indisponível'
     fi
-    if run_cmd 'gh auth status' gh auth status; then
-        ok 'GitHub CLI autenticado'
-        GH_AUTH_READY=1
+    printf '%s' "$GH_STATE"
+}
+
+leanin_gh_key_management_available() {
+    leanin_gh_state >/dev/null
+    [[ $GH_STATE == gh_key_management_available ]]
+}
+
+_github_auth_allowed() {
+    (( ! ${ASSUME_YES:-0} && ! ${DRY_RUN:-0} && ${CI_MODE:-0} != 1 \
+        && ! ${PLAN_ONLY:-0} && ! ${DOCTOR_ONLY:-0} )) \
+        && _github_auth_tty_available
+}
+
+_github_auth_timeout() {
+    local timeout=${LEANIN_GH_AUTH_TIMEOUT:-600}
+    [[ $timeout =~ ^[1-9][0-9]*$ ]] || timeout=600
+    printf '%s' "$timeout"
+}
+
+_github_worker_write_status() {
+    local status=$1 temporary="${GH_AUTH_WORKER_STATUS}.tmp"
+    printf '%s\n' "$status" >"$temporary"
+    mv -- "$temporary" "$GH_AUTH_WORKER_STATUS"
+}
+
+leanin_gh_auth_worker_script() {
+    local root=${LEANIN_GH_WORKER_ROOT:-${LEANIN_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/leanin}}
+    umask 077
+    mkdir -p "$root"
+    chmod 700 "$root"
+    GH_AUTH_WORKER_DIR=$(mktemp -d "$root/gh-auth.XXXXXX") || return 1
+    chmod 700 "$GH_AUTH_WORKER_DIR"
+    GH_AUTH_WORKER_SCRIPT="$GH_AUTH_WORKER_DIR/worker.sh"
+    GH_AUTH_WORKER_STATUS="$GH_AUTH_WORKER_DIR/status"
+    GH_AUTH_WORKER_LOG="$GH_AUTH_WORKER_DIR/worker.log"
+    : >"$GH_AUTH_WORKER_LOG"
+    chmod 600 "$GH_AUTH_WORKER_LOG"
+    printf 'created\n' >"$GH_AUTH_WORKER_STATUS"
+    chmod 600 "$GH_AUTH_WORKER_STATUS"
+
+    cat >"$GH_AUTH_WORKER_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+set -u
+
+mode=$1
+status_file=$2
+log_file=$3
+tty=${LEANIN_GH_WORKER_TTY:-/dev/tty}
+
+write_status() {
+    local value=$1 temporary="${status_file}.tmp"
+    printf '%s\n' "$value" >"$temporary"
+    mv -- "$temporary" "$status_file"
+    printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$value" >>"$log_file"
+}
+
+trap 'write_status cancelled; exit 130' HUP INT TERM
+if [[ ! -e $tty ]] || ! exec 3<>"$tty"; then
+    write_status failed
+    exit 1
+fi
+
+write_status running
+printf '\nleanin GitHub authentication\n' >&3
+printf 'Complete the browser/device-code flow, then return to this terminal.\n' >&3
+printf 'If GitHub CLI asks for Enter, press Enter here.\n\n' >&3
+
+case $mode in
+    login)
+        gh auth login -h github.com -p ssh -s admin:public_key --web <&3 >&3 2>&3
+        ;;
+    refresh)
+        gh auth refresh -h github.com -s admin:public_key <&3 >&3 2>&3
+        ;;
+    *)
+        write_status failed
+        exit 2
+        ;;
+esac
+status=$?
+exec 3>&-
+if (( status == 0 )); then
+    write_status ok
+else
+    write_status failed
+fi
+exit "$status"
+EOF
+    chmod 700 "$GH_AUTH_WORKER_SCRIPT"
+}
+
+_github_launch_terminal() {
+    local launcher=${1:-} base=''
+    base=${launcher##*/}
+    case $base in
+        kitty) kitty --title 'leanin GitHub auth' bash "$GH_AUTH_WORKER_SCRIPT" "$2" "$GH_AUTH_WORKER_STATUS" "$GH_AUTH_WORKER_LOG" >/dev/null 2>&1 & ;;
+        ghostty) ghostty -e bash "$GH_AUTH_WORKER_SCRIPT" "$2" "$GH_AUTH_WORKER_STATUS" "$GH_AUTH_WORKER_LOG" >/dev/null 2>&1 & ;;
+        alacritty) alacritty --title 'leanin GitHub auth' -e bash "$GH_AUTH_WORKER_SCRIPT" "$2" "$GH_AUTH_WORKER_STATUS" "$GH_AUTH_WORKER_LOG" >/dev/null 2>&1 & ;;
+        wezterm) wezterm start -- bash "$GH_AUTH_WORKER_SCRIPT" "$2" "$GH_AUTH_WORKER_STATUS" "$GH_AUTH_WORKER_LOG" >/dev/null 2>&1 & ;;
+        gnome-terminal) gnome-terminal --title='leanin GitHub auth' -- bash "$GH_AUTH_WORKER_SCRIPT" "$2" "$GH_AUTH_WORKER_STATUS" "$GH_AUTH_WORKER_LOG" >/dev/null 2>&1 & ;;
+        konsole) konsole -e bash "$GH_AUTH_WORKER_SCRIPT" "$2" "$GH_AUTH_WORKER_STATUS" "$GH_AUTH_WORKER_LOG" >/dev/null 2>&1 & ;;
+        xfce4-terminal) xfce4-terminal --title='leanin GitHub auth' --command "bash '$GH_AUTH_WORKER_SCRIPT' '$2' '$GH_AUTH_WORKER_STATUS' '$GH_AUTH_WORKER_LOG'" >/dev/null 2>&1 & ;;
+        xterm) xterm -T 'leanin GitHub auth' -e bash "$GH_AUTH_WORKER_SCRIPT" "$2" "$GH_AUTH_WORKER_STATUS" "$GH_AUTH_WORKER_LOG" >/dev/null 2>&1 & ;;
+        *) return 1 ;;
+    esac
+    GH_AUTH_WORKER_PID=$!
+    return 0
+}
+
+leanin_gh_launch_auth_worker() {
+    local mode=$1 launcher='' candidate=''
+    leanin_gh_auth_worker_script || return 1
+    _github_worker_write_status running
+    GH_STATE='gh_auth_worker_running'
+
+    if [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]]; then
+        if [[ -n ${TERMINAL:-} ]]; then
+            candidate=${TERMINAL%% *}
+            if command_exists "$candidate" && _github_launch_terminal "$candidate" "$mode"; then
+                launcher=${candidate##*/}
+            fi
+        fi
+        if [[ -z $launcher ]]; then
+            for candidate in kitty ghostty alacritty wezterm gnome-terminal konsole xfce4-terminal xterm; do
+                if command_exists "$candidate" && _github_launch_terminal "$candidate" "$mode"; then
+                    launcher=$candidate
+                    break
+                fi
+            done
+        fi
+    fi
+
+    if [[ -n $launcher ]]; then
+        GH_AUTH_WORKER_LAUNCH='terminal'
+        info 'autenticação GitHub aberta em outro terminal'
+        info 'conclua o fluxo de navegador/device-code nesse terminal'
         return 0
     fi
-    if ! yesno 'Autenticar GitHub CLI agora?' n; then
-        skip 'autenticação GitHub CLI recusada'
-        return 1
-    fi
-    if _github_login_with_ssh_permissions \
-        && run_cmd 'verificar autenticação GitHub CLI' gh auth status; then
-        ok 'GitHub CLI autenticado'
-        GH_AUTH_READY=1
-        GH_AUTH_JUST_CREATED=1
-        return 0
-    fi
-    warn 'autenticação GitHub CLI não concluída'
-    info 'tente novamente: gh auth login -h github.com -s admin:public_key'
-    FAILURES+=('gh:auth')
+
+    GH_AUTH_WORKER_LAUNCH='tty'
+    info 'iniciando autenticação GitHub neste terminal'
+    info 'se aparecer um código único, copie e autentique no navegador'
+    info 'se o GitHub CLI pedir Enter, pressione Enter aqui'
+    bash "$GH_AUTH_WORKER_SCRIPT" "$mode" "$GH_AUTH_WORKER_STATUS" "$GH_AUTH_WORKER_LOG" || true
+    return 0
+}
+
+leanin_gh_wait_auth_worker() {
+    local timeout elapsed=0 status=''
+    timeout=$(_github_auth_timeout)
+    while (( elapsed < timeout )); do
+        status=$(<"$GH_AUTH_WORKER_STATUS")
+        case $status in
+            ok) return 0 ;;
+            failed|cancelled)
+                GH_STATE='gh_auth_worker_failed'
+                return 1
+                ;;
+        esac
+        if (( elapsed > 0 && elapsed % 30 == 0 )); then
+            info "ainda aguardando autenticação GitHub... ${elapsed}s"
+        fi
+        sleep 1
+        ((elapsed += 1))
+    done
+    _github_worker_write_status timeout
+    GH_STATE='gh_auth_worker_failed'
+    warn "autenticação GitHub excedeu ${timeout}s; o worker não foi encerrado à força"
     return 1
 }
 
-github_upgrade_ssh_key_permissions() {
-    if (( ${ASSUME_YES:-0} || ${CI_MODE:-0} == 1 || ${PLAN_ONLY:-0} || ${DOCTOR_ONLY:-0} )); then
-        skip 'atualização de permissões GitHub pulada por modo seguro'
-        return 1
+_github_auth_command() {
+    local mode=$1
+    case $mode in
+        login) info 'comando do worker: gh auth login -h github.com -p ssh -s admin:public_key --web' ;;
+        refresh) info 'comando do worker: gh auth refresh -h github.com -s admin:public_key' ;;
+    esac
+}
+
+leanin_gh_supervise_auth() {
+    local mode=$1
+    _github_auth_allowed || return 1
+    _github_auth_command "$mode"
+    leanin_gh_launch_auth_worker "$mode" || return 1
+    if [[ $GH_AUTH_WORKER_LAUNCH == terminal ]]; then
+        info 'aguardando autenticação GitHub...'
     fi
-    if ! yesno 'Atualizar permissões GitHub CLI agora?' n; then
-        skip 'atualização de permissões GitHub recusada'
-        return 1
-    fi
-    if ! _github_refresh_ssh_key_permissions; then
-        return 1
-    fi
-    GITHUB_SSH_PERMISSIONS_UPGRADED=1
-    github_ssh_key_management_ready
+    leanin_gh_wait_auth_worker || return 1
+    info 'worker de autenticação GitHub terminou; verificando permissões'
+    leanin_gh_key_management_available
 }
 
 github_ssh_key_management_ready() {
-    if run_cmd 'listar SSH keys do GitHub' gh ssh-key list; then
-        GH_SSH_KEY_LIST_READY=1
-        # The same admin:public_key grant controls the list, add, and delete
-        # endpoints. Individual add/delete errors are still handled below.
-        GH_SSH_KEY_ADD_READY=1
-        GH_SSH_KEY_DELETE_READY=1
-        # Read by the installer summary after this module is sourced.
-        # shellcheck disable=SC2034
-        GITHUB_SSH_MANAGEMENT_STATUS='disponível'
-        if (( GH_SSH_KEY_LIST_READY && GH_SSH_KEY_ADD_READY && GH_SSH_KEY_DELETE_READY )); then
-            ok 'GitHub SSH key management disponível'
-        fi
+    if leanin_gh_key_management_available; then
+        ok 'GitHub SSH key management disponível'
         return 0
     fi
-
-    # Read by the installer summary after this module is sourced.
-    # shellcheck disable=SC2034
-    GITHUB_SSH_MANAGEMENT_STATUS='indisponível'
-    warn 'GitHub CLI autenticado, mas não pode gerenciar SSH keys'
-    info 'execute: gh auth refresh -h github.com -s admin:public_key'
     return 1
 }
 
@@ -324,11 +413,7 @@ github_add_ssh_key() {
     if run_cmd 'cadastrar SSH key no GitHub' \
         gh ssh-key add "$public_key" --title "$key_title" --type authentication; then
         ok "chave GitHub cadastrada: $key_title"
-        if (( GITHUB_SSH_PERMISSIONS_UPGRADED )); then
-            GITHUB_NEW_KEY_STATUS='permissões atualizadas, cadastrada automaticamente via gh'
-        else
-            GITHUB_NEW_KEY_STATUS='cadastrada automaticamente via gh'
-        fi
+        GITHUB_NEW_KEY_STATUS='cadastrada automaticamente via gh'
         return 0
     fi
     warn 'falha ao cadastrar chave SSH no GitHub'
@@ -347,6 +432,7 @@ github_confirm_ssh_key_registration() {
 }
 
 github_manual_ssh_key() {
+    GH_STATE='gh_manual_pending'
     GITHUB_NEW_KEY_STATUS='registro manual pendente'
     warn 'cadastro automático de SSH no GitHub indisponível'
     print_pubkey || warn 'não foi possível mostrar a chave pública'
@@ -388,7 +474,8 @@ github_manage_ssh_key() {
 
     if (( DRY_RUN )); then
         printf '> [dry-run] listaria SSH keys cadastradas no GitHub\n'
-        printf '> [dry-run] executaria autenticação GitHub CLI no navegador/dispositivo com admin:public_key\n'
+        printf '> [dry-run] iniciaria worker supervisionado de autenticação GitHub\n'
+        printf '> [dry-run] solicitaria o escopo admin:public_key\n'
         if ((${#GITHUB_KEY_VALUES[@]})) && github_key_exists "$public_key"; then
             skip 'chave GitHub já cadastrada'
             GITHUB_NEW_KEY_STATUS='já existia'
@@ -407,15 +494,64 @@ github_manage_ssh_key() {
         return 0
     fi
 
-    if ! _github_gh_ready; then
-        github_manual_ssh_key
-        return 0
-    fi
-    if ! github_ssh_key_management_ready; then
-        if (( GH_AUTH_JUST_CREATED )) || ! github_upgrade_ssh_key_permissions; then
+    leanin_gh_state >/dev/null
+    case $GH_STATE in
+        gh_missing)
+            warn 'GitHub CLI indisponível; cadastro automático não será usado'
+            info 'instale github-cli e execute novamente'
             github_manual_ssh_key
             return 0
-        fi
+            ;;
+        gh_unauthenticated)
+            if ! _github_auth_allowed; then
+                warn 'autenticação GitHub interativa indisponível neste modo'
+                info 'login: gh auth login -h github.com -p ssh -s admin:public_key --web'
+                github_manual_ssh_key
+                return 0
+            fi
+            if ! yesno 'Autenticar GitHub CLI agora?' n; then
+                skip 'autenticação GitHub CLI recusada'
+                github_manual_ssh_key
+                return 0
+            fi
+            if ! leanin_gh_supervise_auth login; then
+                warn 'autenticação GitHub não foi concluída'
+                info 'próximo passo: gh auth login -h github.com -p ssh -s admin:public_key --web'
+                github_manual_ssh_key
+                return 0
+            fi
+            ;;
+        gh_authenticated_no_key_scope)
+            if ! _github_auth_allowed; then
+                warn 'GitHub CLI autenticado, mas SSH key management indisponível'
+                info 'corrija: gh auth refresh -h github.com -s admin:public_key'
+                github_manual_ssh_key
+                return 0
+            fi
+            if ! yesno 'Atualizar permissões GitHub CLI agora?' n; then
+                skip 'atualização de permissões GitHub recusada'
+                github_manual_ssh_key
+                return 0
+            fi
+            if ! leanin_gh_supervise_auth refresh; then
+                warn 'atualização de permissões GitHub não foi concluída'
+                info 'próximo passo: gh auth refresh -h github.com -s admin:public_key'
+                github_manual_ssh_key
+                return 0
+            fi
+            ;;
+        gh_key_management_available) ;;
+        *)
+            warn 'estado GitHub desconhecido; cadastro automático não continuará'
+            github_manual_ssh_key
+            return 0
+            ;;
+    esac
+
+    if ! github_ssh_key_management_ready; then
+        GH_STATE='gh_manual_pending'
+        github_manual_ssh_key
+        return 0
     fi
     if ! github_list_ssh_keys; then
         # Read by the installer summary after this module is sourced.
@@ -428,7 +564,7 @@ github_manage_ssh_key() {
 
     github_register_ssh_key "$public_key"
     case $GITHUB_NEW_KEY_STATUS in
-        'já existia'|'cadastrada automaticamente via gh'|'permissões atualizadas, cadastrada automaticamente via gh')
+        'já existia'|'cadastrada automaticamente via gh')
             if github_collect_old_ssh_keys "$public_key"; then
                 github_delete_ssh_keys
             else
@@ -449,40 +585,7 @@ github_manage_ssh_key() {
 
 github_ssh_registration_ready() {
     case ${GITHUB_NEW_KEY_STATUS:-} in
-        'já existia'|'cadastrada automaticamente via gh'|'permissões atualizadas, cadastrada automaticamente via gh') return 0 ;;
+        'já existia'|'cadastrada automaticamente via gh') return 0 ;;
     esac
     return 1
-}
-
-configure_gh() {
-    if ! command_exists gh; then
-        warn 'GitHub CLI indisponível; autenticação pulada'
-        info 'para autenticar depois: gh auth login -h github.com -s admin:public_key'
-        return 1
-    fi
-    if (( DRY_RUN )); then
-        dry_run_msg gh auth status
-        printf '> [dry-run] executaria autenticação GitHub CLI no navegador/dispositivo com admin:public_key\n'
-        return 0
-    fi
-    if (( GH_AUTH_READY )); then
-        return 0
-    fi
-    if run_cmd 'gh auth status' gh auth status; then
-        ok 'GitHub CLI já autenticado'
-        return 0
-    fi
-    if ! yesno 'Autenticar GitHub CLI agora?' n; then
-        skip 'autenticação GitHub CLI recusada'
-        return 0
-    fi
-    if _github_login_with_ssh_permissions \
-        && run_cmd 'verificar autenticação GitHub CLI' gh auth status; then
-        ok 'GitHub CLI autenticado'
-    else
-        warn 'autenticação GitHub CLI não concluída'
-        info 'tente novamente: gh auth login -h github.com -s admin:public_key'
-        FAILURES+=('gh:auth')
-        return 1
-    fi
 }

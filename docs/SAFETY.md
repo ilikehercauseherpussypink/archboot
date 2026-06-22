@@ -23,6 +23,14 @@ When started through `curl | bash`, prompts, `ssh-keygen`, and `ssh-add` use `/d
 
 `--help` and `--version` finish before the repository bootstrap, so they do not create logs or download the full project.
 
+## GitHub authentication
+
+During an interactive run, leanin can launch a supervised GitHub authentication worker. It requests the `admin:public_key` scope, waits visibly for the browser/device-code flow, rechecks `gh auth status` and `gh ssh-key list`, then continues automatic SSH-key registration only when key management is available.
+
+When a graphical session and supported terminal are available, the worker can open in a separate terminal. Otherwise it uses the current `/dev/tty`. `--yes`, `--dry-run`, `--doctor`, `--plan`, and CI never launch it. If it fails, times out, or cannot start, leanin shows the key, the exact `gh` command, and the manual GitHub-keys URL.
+
+`GH_TOKEN` or `GITHUB_TOKEN` can satisfy GitHub CLI authentication for headless automation, but leanin does not require either for the normal personal flow.
+
 ## Packages and services
 
 The installer never removes packages, clears the pacman lock or enables a missing service. It verifies the pacman lock before package work and treats the Mullvad package conflict as a skip.

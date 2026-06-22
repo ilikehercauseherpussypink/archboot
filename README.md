@@ -44,7 +44,7 @@ It is not a distro installer. It is not meant to be universal. It is my setup, a
 | --- | --- |
 | Package sources | pacman, Flatpak/Flathub, and AUR |
 | Safety | Dry-run, doctor mode, safe prompts, and no automatic removals |
-| SSH and GitHub | Key reuse, backups, registration through `gh`, and guarded remote-key deletion |
+| SSH and GitHub | Key reuse, backups, supervised `gh` authentication, automatic registration, and guarded remote-key deletion |
 | Codex | Isolated npm prefix under `~/.codex` |
 | Services | System/user service lists with idempotent activation |
 | Reliability | ShellCheck, CI, mocks, and regression checks |
@@ -91,6 +91,7 @@ flatpak run org.vinegarhq.Sober
 * Pipe installs read prompts from `/dev/tty` when available.
 * SSH key generation and `ssh-add` use `/dev/tty` during pipe installs, so a passphrase never consumes the pipe input.
 * `--help` and `--version` exit before the repository bootstrap.
+* Interactive GitHub authentication runs as a supervised worker: leanin waits visibly, rechecks SSH-key permission, then continues registration automatically.
 
 ## architecture
 

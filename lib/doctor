@@ -122,7 +122,8 @@ _doctor_github() {
                 info 'corrija: gh auth refresh -h github.com -s admin:public_key'
             fi
         else
-            info 'GitHub CLI não autenticado; use: gh auth login -h github.com -s admin:public_key'
+            warn 'GitHub CLI não autenticado'
+            info 'login: gh auth login -h github.com -p ssh -s admin:public_key --web'
             info 'GitHub SSH key management pendente'
         fi
     else
