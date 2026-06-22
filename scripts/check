@@ -1578,10 +1578,11 @@ if github_dry_output=$(HOME="$ssh_test_home" PATH="$fake_bin:$PATH" bash -c '
 ' 2>&1) \
     && [[ ! -e $gh_marker ]] \
     && ! grep -Fq 'gh ssh-key delete' <<<"$github_dry_output" \
-    && ! grep -Fq 'gh ssh-key add' <<<"$github_dry_output"; then
-    ok 'dry-run não executa gh ssh-key delete/add'
+    && ! grep -Fq 'gh ssh-key add' <<<"$github_dry_output" \
+    && grep -Fq '[dry-run] perguntaria se deve autenticar GitHub CLI com admin:public_key' <<<"$github_dry_output"; then
+    ok 'dry-run não executa gh nem autentica GitHub CLI'
 else
-    error 'dry-run invocou uma operação gh mutável'
+    error 'dry-run invocou GitHub CLI ou omitiu o login com escopo planejado'
     ((failures += 1))
 fi
 
@@ -1898,8 +1899,8 @@ else
     ((failures += 1))
 fi
 
-github_scope_mock() {
-    local scenario=$1 marker="$ssh_test_home/github-scope-$1" output=''
+github_auth_mock() {
+    local scenario=$1 marker="$ssh_test_home/github-auth-$1" output=''
     rm -f "$marker" "$marker.title"
     output=$(HOME="$ssh_test_home" SCENARIO="$scenario" MARKER="$marker" bash -c '
         set -Eeuo pipefail
@@ -1911,9 +1912,8 @@ github_scope_mock() {
         LOG_FILE=/dev/null
         FAILURES=()
         mkdir -p "$HOME/.ssh"
-        public_key="$HOME/.ssh/scope.pub"
-        printf "ssh-ed25519 AAAASCOPE mock@example\\n" >"$public_key"
-        _github_gh_ready() { return 0; }
+        public_key="$HOME/.ssh/auth.pub"
+        printf "ssh-ed25519 AAAAAUTH mock@example\\n" >"$public_key"
         print_pubkey() { return 0; }
         github_list_ssh_keys() {
             GITHUB_KEY_IDS=()
@@ -1922,72 +1922,104 @@ github_scope_mock() {
         }
         prompt() {
             : >"$MARKER.title"
-            printf -v "$1" "%s" "scope title"
+            printf -v "$1" "%s" "auth title"
+        }
+        command_exists() {
+            [[ $SCENARIO != missing && $1 == gh ]]
         }
         yesno() {
             printf "ask:%s\\n" "$1" >>"$MARKER"
-            case "$SCENARIO:$1" in
-                missing-no:*) return 1 ;;
-                refresh-fail:*) return 0 ;;
-                refresh-yes:*) return 0 ;;
-                *) return 1 ;;
-            esac
+            [[ $SCENARIO == unauth-yes ]]
         }
         run_cmd() {
             printf "%s\\n" "$*" >>"$MARKER"
             case "$2 $3 $4" in
-                "gh ssh-key list")
-                    if [[ -e $MARKER.refreshed || $SCENARIO == normal ]]; then
-                        return 0
-                    fi
-                    return 1
+                "gh auth status")
+                    [[ -e $MARKER.logged-in || $SCENARIO == weak ]]
                     ;;
-                "gh auth refresh")
-                    [[ $SCENARIO == refresh-fail ]] && return 1
-                    : >"$MARKER.refreshed"
-                    return 0
+                "gh auth login")
+                    : >"$MARKER.logged-in"
+                    ;;
+                "gh ssh-key list")
+                    [[ $SCENARIO != weak ]]
                     ;;
                 "gh ssh-key add") return 0 ;;
                 "gh ssh-key delete") return 0 ;;
             esac
-            return 0
         }
         [[ $SCENARIO == yes-safe ]] && ASSUME_YES=1
         github_manage_ssh_key "$public_key"
         case "$SCENARIO" in
-            missing-no|refresh-fail|yes-safe)
+            missing|weak|yes-safe)
                 [[ $GITHUB_NEW_KEY_STATUS == "registro manual pendente" ]]
                 ! grep -Fq "gh ssh-key add" "$MARKER"
                 ! grep -Fq "gh ssh-key delete" "$MARKER"
+                ! grep -Fq "gh auth refresh" "$MARKER"
+                [[ ! -e $MARKER.title ]]
                 ;;
-            refresh-yes)
+            unauth-yes)
                 [[ $GITHUB_NEW_KEY_STATUS == "cadastrada automaticamente via gh" ]]
-                grep -Fq "gh auth refresh -h github.com -s admin:public_key" "$MARKER"
-                [[ $(grep -Fc "gh ssh-key list" "$MARKER") == 2 ]]
-                grep -Fq "gh ssh-key add $public_key --title scope title --type authentication" "$MARKER"
+                grep -Fq "gh auth login --web -h github.com -s admin:public_key" "$MARKER"
+                [[ $(grep -Fc "gh auth status" "$MARKER") == 2 ]]
+                grep -Fq "gh ssh-key list" "$MARKER"
+                grep -Fq "gh ssh-key add $public_key --title auth title --type authentication" "$MARKER"
                 ;;
         esac
     ' 2>&1) || return 1
     case $scenario in
-        missing-no)
-            grep -Fq 'ask:GitHub CLI precisa de permissões para SSH keys. Atualizar agora?' "$marker"
+        missing)
+            grep -Fq 'GitHub CLI indisponível' <<<"$output"
             ;;
-        refresh-fail)
-            grep -Fq 'não foi possível atualizar as permissões GitHub SSH' <<<"$output"
+        weak)
+            grep -Fq 'GitHub CLI autenticado, mas não pode gerenciar SSH keys' <<<"$output" \
+                && grep -Fq 'gh auth refresh -h github.com -s admin:public_key' <<<"$output"
             ;;
         yes-safe)
-            ! grep -Fq 'gh auth refresh' "$marker"
+            grep -Fq 'ask:Autenticar GitHub CLI agora?' "$marker"
             ;;
     esac
 }
 
-if github_scope_mock missing-no \
-    && github_scope_mock refresh-yes \
-    && github_scope_mock refresh-fail \
-    && github_scope_mock yes-safe; then
-    ok 'permissões GitHub SSH usam refresh seguro e fallback manual'
+if github_auth_mock missing \
+    && github_auth_mock unauth-yes \
+    && github_auth_mock weak \
+    && github_auth_mock yes-safe; then
+    ok 'login GitHub pede admin:public_key e escopos fracos usam fallback manual'
 else
-    error 'fluxo de permissões GitHub SSH falhou'
+    error 'fluxo de autenticação GitHub SSH falhou'
+    ((failures += 1))
+fi
+
+if ! rg -n '^[[:space:]]*gh[[:space:]]+auth[[:space:]]+refresh' \
+    install.sh lib/gh >/dev/null \
+    && rg -n 'gh[[:space:]]+auth[[:space:]]+login[[:space:]]+--web[[:space:]]+-h[[:space:]]+github\.com[[:space:]]+-s[[:space:]]+admin:public_key' \
+        lib/gh >/dev/null; then
+    ok 'instalador não executa gh auth refresh e login pede admin:public_key'
+else
+    error 'instalador ainda executa refresh ou omite escopo no login GitHub'
+    ((failures += 1))
+fi
+
+if doctor_github_output=$(HOME="$ssh_test_home" bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/doctor
+    command_exists() { [[ $1 == gh ]]; }
+    gh() {
+        case "${1:-} ${2:-} ${3:-}" in
+            "auth status ") return 0 ;;
+            "ssh-key list") return 1 ;;
+        esac
+        return 90
+    }
+    _doctor_github
+' 2>&1) \
+    && grep -Fq 'GitHub CLI autenticado' <<<"$doctor_github_output" \
+    && grep -Fq 'GitHub SSH key management indisponível' <<<"$doctor_github_output" \
+    && grep -Fq 'gh auth refresh -h github.com -s admin:public_key' <<<"$doctor_github_output"; then
+    ok 'doctor relata autenticação e permissões GitHub SSH sem alterar estado'
+else
+    error 'doctor não distinguiu escopos GitHub SSH de autenticação'
     ((failures += 1))
 fi
 

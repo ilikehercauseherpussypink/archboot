@@ -31,7 +31,7 @@ _github_key_material() {
 _github_gh_ready() {
     if ! command_exists gh; then
         warn 'GitHub CLI indisponível; cadastro automático não será usado'
-        info 'para autenticar depois: gh auth login'
+        info 'para autenticar depois: gh auth login -h github.com -s admin:public_key'
         return 1
     fi
     if run_cmd 'gh auth status' gh auth status; then
@@ -39,17 +39,19 @@ _github_gh_ready() {
         GH_AUTH_READY=1
         return 0
     fi
-    if ! yesno 'Autenticar GitHub CLI via navegador para cadastrar a chave SSH?' n; then
+    if ! yesno 'Autenticar GitHub CLI agora?' n; then
         skip 'autenticação GitHub CLI recusada'
         return 1
     fi
-    if gh auth login --web; then
+    if run_cmd 'autenticar GitHub CLI com permissões de SSH keys' \
+        gh auth login --web -h github.com -s admin:public_key \
+        && run_cmd 'verificar autenticação GitHub CLI' gh auth status; then
         ok 'GitHub CLI autenticado'
         GH_AUTH_READY=1
         return 0
     fi
     warn 'autenticação GitHub CLI não concluída'
-    info 'tente novamente: gh auth login'
+    info 'tente novamente: gh auth login -h github.com -s admin:public_key'
     FAILURES+=('gh:auth')
     return 1
 }
@@ -65,7 +67,7 @@ github_ssh_key_management_ready() {
         # shellcheck disable=SC2034
         GITHUB_SSH_MANAGEMENT_STATUS='disponível'
         if (( GH_SSH_KEY_LIST_READY && GH_SSH_KEY_ADD_READY && GH_SSH_KEY_DELETE_READY )); then
-            ok 'GitHub CLI pode listar, cadastrar e remover SSH keys'
+            ok 'GitHub SSH key management disponível'
         fi
         return 0
     fi
@@ -73,19 +75,8 @@ github_ssh_key_management_ready() {
     # Read by the installer summary after this module is sourced.
     # shellcheck disable=SC2034
     GITHUB_SSH_MANAGEMENT_STATUS='indisponível'
-    warn 'GitHub CLI não tem permissões para gerenciar SSH keys'
+    warn 'GitHub CLI autenticado, mas não pode gerenciar SSH keys'
     info 'execute: gh auth refresh -h github.com -s admin:public_key'
-    return 1
-}
-
-github_refresh_ssh_key_permissions() {
-    if run_cmd 'atualizar permissões de SSH keys do GitHub' \
-        gh auth refresh -h github.com -s admin:public_key; then
-        ok 'permissões GitHub atualizadas'
-        return 0
-    fi
-    warn 'não foi possível atualizar as permissões GitHub SSH'
-    info 'tente: gh auth refresh -h github.com -s admin:public_key'
     return 1
 }
 
@@ -292,30 +283,6 @@ github_register_ssh_key() {
     github_add_ssh_key "$public_key" "$GITHUB_KEY_TITLE" || github_manual_ssh_key
 }
 
-github_resolve_ssh_key_permissions() {
-    if (( DRY_RUN )); then
-        printf '> [dry-run] perguntaria se deve atualizar permissões de SSH keys do GitHub\n'
-        GITHUB_NEW_KEY_STATUS='dry-run: registro manual pendente'
-        GITHUB_OLD_KEYS_STATUS='não verificadas'
-        return 1
-    fi
-    if (( ${ASSUME_YES:-0} || ${CI_MODE:-0} == 1 || ${PLAN_ONLY:-0} || ${DOCTOR_ONLY:-0} )); then
-        skip 'configuração automática de SSH GitHub pulada por modo seguro'
-        github_manual_ssh_key
-        return 1
-    fi
-    if ! yesno 'GitHub CLI precisa de permissões para SSH keys. Atualizar agora?' n; then
-        skip 'configuração automática de SSH GitHub pulada'
-        github_manual_ssh_key
-        return 1
-    fi
-    github_refresh_ssh_key_permissions || {
-        github_manual_ssh_key
-        return 1
-    }
-    github_ssh_key_management_ready
-}
-
 github_manage_ssh_key() {
     local public_key=${1:-}
 
@@ -327,7 +294,7 @@ github_manage_ssh_key() {
 
     if (( DRY_RUN )); then
         printf '> [dry-run] listaria SSH keys cadastradas no GitHub\n'
-        printf '> [dry-run] perguntaria se deve atualizar permissões de SSH keys do GitHub\n'
+        printf '> [dry-run] perguntaria se deve autenticar GitHub CLI com admin:public_key\n'
         if ((${#GITHUB_KEY_VALUES[@]})) && github_key_exists "$public_key"; then
             skip 'chave GitHub já cadastrada'
             GITHUB_NEW_KEY_STATUS='já existia'
@@ -351,9 +318,8 @@ github_manage_ssh_key() {
         return 0
     fi
     if ! github_ssh_key_management_ready; then
-        if ! github_resolve_ssh_key_permissions; then
-            return 0
-        fi
+        github_manual_ssh_key
+        return 0
     fi
     if ! github_list_ssh_keys; then
         # Read by the installer summary after this module is sourced.
@@ -395,12 +361,12 @@ github_ssh_registration_ready() {
 configure_gh() {
     if ! command_exists gh; then
         warn 'GitHub CLI indisponível; autenticação pulada'
-        info 'para autenticar depois: gh auth login'
+        info 'para autenticar depois: gh auth login -h github.com -s admin:public_key'
         return 1
     fi
     if (( DRY_RUN )); then
         dry_run_msg gh auth status
-        info 'autenticação GitHub CLI seria verificada'
+        printf '> [dry-run] perguntaria se deve autenticar GitHub CLI com admin:public_key\n'
         return 0
     fi
     if (( GH_AUTH_READY )); then
@@ -410,15 +376,17 @@ configure_gh() {
         ok 'GitHub CLI já autenticado'
         return 0
     fi
-    if ! yesno 'Autenticar GitHub CLI via navegador?' n; then
+    if ! yesno 'Autenticar GitHub CLI agora?' n; then
         skip 'autenticação GitHub CLI recusada'
         return 0
     fi
-    if gh auth login --web; then
+    if run_cmd 'autenticar GitHub CLI com permissões de SSH keys' \
+        gh auth login --web -h github.com -s admin:public_key \
+        && run_cmd 'verificar autenticação GitHub CLI' gh auth status; then
         ok 'GitHub CLI autenticado'
     else
         warn 'autenticação GitHub CLI não concluída'
-        info 'tente novamente: gh auth login'
+        info 'tente novamente: gh auth login -h github.com -s admin:public_key'
         FAILURES+=('gh:auth')
         return 1
     fi

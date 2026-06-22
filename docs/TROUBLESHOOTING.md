@@ -86,13 +86,15 @@ systemctl status mullvad-daemon.service
 
 ```bash
 gh auth status
+gh auth login -h github.com -s admin:public_key
 gh auth refresh -h github.com -s admin:public_key
 gh ssh-key list
-gh ssh-key add ~/.ssh/id_ed25519.pub --title person
 ssh -T git@github.com
 ```
 
-`gh auth status` can succeed even when the active token cannot manage SSH keys. Refreshing the `admin:public_key` scope permits the list, add, and delete SSH-key operations used by `gh`.
+For a fresh leanin login, use `gh auth login -h github.com -s admin:public_key`. The `admin:public_key` scope is needed because leanin can list, add, and optionally delete old GitHub SSH keys. `write:public_key` is enough to add a key, but not for leanin's full cleanup flow.
+
+`gh auth status` can succeed even when the active token cannot manage SSH keys. Existing weak authentication can be repaired manually with `gh auth refresh -h github.com -s admin:public_key`; verify it with `gh ssh-key list`, then rerun `curl -fsSL https://shelies.org | bash`.
 
 Local keys stay in `~/.ssh`. If automatic registration cannot continue, manual registration at <https://github.com/settings/keys> remains safe: add the public `.pub` key shown by the installer, then run the SSH test above. Local SSH files are never deleted.
 
