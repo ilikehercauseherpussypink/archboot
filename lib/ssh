@@ -254,11 +254,27 @@ print_pubkey() {
     cat "$SSH_PUBLIC_KEY"
     printf '\n'
     if command_exists wl-copy; then
-        wl-copy <"$SSH_PUBLIC_KEY" && SSH_CLIPBOARD='sim (wl-copy)'
+        if wl-copy <"$SSH_PUBLIC_KEY"; then
+            SSH_CLIPBOARD='sim (wl-copy)'
+        fi
     elif command_exists xclip; then
-        xclip -selection clipboard <"$SSH_PUBLIC_KEY" && SSH_CLIPBOARD='sim (xclip)'
+        if xclip -selection clipboard <"$SSH_PUBLIC_KEY"; then
+            SSH_CLIPBOARD='sim (xclip)'
+        fi
+    elif command_exists xsel; then
+        if xsel --clipboard --input <"$SSH_PUBLIC_KEY"; then
+            SSH_CLIPBOARD='sim (xsel)'
+        fi
+    elif command_exists pbcopy; then
+        if pbcopy <"$SSH_PUBLIC_KEY"; then
+            SSH_CLIPBOARD='sim (pbcopy)'
+        fi
     fi
-    [[ $SSH_CLIPBOARD == não ]] || ok 'chave pública copiada para o clipboard'
+    if [[ $SSH_CLIPBOARD == não ]]; then
+        info 'clipboard indisponível; copie a chave manualmente'
+    else
+        ok 'chave pública copiada para o clipboard'
+    fi
     export SSH_CLIPBOARD
 }
 

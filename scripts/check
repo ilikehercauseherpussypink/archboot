@@ -1731,10 +1731,11 @@ if HOME="$ssh_test_home" bash -c '
     LOG_FILE=/dev/null
     FAILURES=()
     GITHUB_KEY_VALUES=()
+    mkdir -p "$HOME/.ssh"
     printf "ssh-ed25519 AAAATEST mock@example\n" >"$HOME/.ssh/test.pub"
     run_cmd() { exit 90; }
     github_register_ssh_key "$HOME/.ssh/test.pub"
-    [[ $GITHUB_NEW_KEY_STATUS == pulada ]]
+    [[ $GITHUB_NEW_KEY_STATUS == "registro manual pendente" ]]
 ' >/dev/null 2>&1; then
     ok '--yes não recadastra chave GitHub local existente'
 else
@@ -1761,11 +1762,15 @@ github_prompt_order_mock() {
         printf "ssh-ed25519 AAAACURRENT mock@example\n" >"$public_key"
         _github_gh_ready() { return 0; }
         github_list_ssh_keys() { return 0; }
+        print_pubkey() { return 0; }
         prompt() {
             : >"$MARKER.title"
             printf -v "$1" "%s" "chosen title"
         }
         run_cmd() {
+            if [[ $1 == "listar SSH keys do GitHub" ]]; then
+                return 0
+            fi
             printf "%s\n" "$*" >"$MARKER.add"
             return 0
         }
@@ -1828,7 +1833,7 @@ github_prompt_order_mock() {
                 [[ ! -e $MARKER.title && ! -e $MARKER.add ]]
                 ;;
             absent-no)
-                [[ $GITHUB_NEW_KEY_STATUS == pulada ]]
+                [[ $GITHUB_NEW_KEY_STATUS == "registro manual pendente" ]]
                 [[ ! -e $MARKER.title && ! -e $MARKER.add ]]
                 ;;
             absent-yes)
@@ -1837,7 +1842,7 @@ github_prompt_order_mock() {
                 [[ $GITHUB_NEW_KEY_STATUS == "cadastrada automaticamente via gh" ]]
                 ;;
             yes-safe)
-                [[ $GITHUB_NEW_KEY_STATUS == pulada ]]
+                [[ $GITHUB_NEW_KEY_STATUS == "registro manual pendente" ]]
                 [[ $GITHUB_OLD_KEYS_STATUS == mantidas ]]
                 [[ ! -e $MARKER.title && ! -e $MARKER.add ]]
                 ;;
@@ -1861,6 +1866,7 @@ github_prompt_order_mock() {
             ;;
         absent-no)
             grep -Fq '[skip] cadastro da chave GitHub pulado' <<<"$output" \
+                && grep -Fq '[warn] cadastro automático de SSH no GitHub indisponível' <<<"$output" \
                 && ! grep -Fq 'título da chave no GitHub' <<<"$output"
             ;;
         absent-yes)
@@ -1889,6 +1895,146 @@ if github_prompt_order_mock existing \
     ok 'fluxo GitHub separa remoção, cadastro e título da chave'
 else
     error 'ordem de prompts GitHub SSH não respeita o cadastro real da chave'
+    ((failures += 1))
+fi
+
+github_scope_mock() {
+    local scenario=$1 marker="$ssh_test_home/github-scope-$1" output=''
+    rm -f "$marker" "$marker.title"
+    output=$(HOME="$ssh_test_home" SCENARIO="$scenario" MARKER="$marker" bash -c '
+        set -Eeuo pipefail
+        source lib/log
+        source lib/ask
+        source lib/gh
+        DRY_RUN=0
+        VERBOSE=0
+        LOG_FILE=/dev/null
+        FAILURES=()
+        mkdir -p "$HOME/.ssh"
+        public_key="$HOME/.ssh/scope.pub"
+        printf "ssh-ed25519 AAAASCOPE mock@example\\n" >"$public_key"
+        _github_gh_ready() { return 0; }
+        print_pubkey() { return 0; }
+        github_list_ssh_keys() {
+            GITHUB_KEY_IDS=()
+            GITHUB_KEY_TITLES=()
+            GITHUB_KEY_VALUES=()
+        }
+        prompt() {
+            : >"$MARKER.title"
+            printf -v "$1" "%s" "scope title"
+        }
+        yesno() {
+            printf "ask:%s\\n" "$1" >>"$MARKER"
+            case "$SCENARIO:$1" in
+                missing-no:*) return 1 ;;
+                refresh-fail:*) return 0 ;;
+                refresh-yes:*) return 0 ;;
+                *) return 1 ;;
+            esac
+        }
+        run_cmd() {
+            printf "%s\\n" "$*" >>"$MARKER"
+            case "$2 $3 $4" in
+                "gh ssh-key list")
+                    if [[ -e $MARKER.refreshed || $SCENARIO == normal ]]; then
+                        return 0
+                    fi
+                    return 1
+                    ;;
+                "gh auth refresh")
+                    [[ $SCENARIO == refresh-fail ]] && return 1
+                    : >"$MARKER.refreshed"
+                    return 0
+                    ;;
+                "gh ssh-key add") return 0 ;;
+                "gh ssh-key delete") return 0 ;;
+            esac
+            return 0
+        }
+        [[ $SCENARIO == yes-safe ]] && ASSUME_YES=1
+        github_manage_ssh_key "$public_key"
+        case "$SCENARIO" in
+            missing-no|refresh-fail|yes-safe)
+                [[ $GITHUB_NEW_KEY_STATUS == "registro manual pendente" ]]
+                ! grep -Fq "gh ssh-key add" "$MARKER"
+                ! grep -Fq "gh ssh-key delete" "$MARKER"
+                ;;
+            refresh-yes)
+                [[ $GITHUB_NEW_KEY_STATUS == "cadastrada automaticamente via gh" ]]
+                grep -Fq "gh auth refresh -h github.com -s admin:public_key" "$MARKER"
+                [[ $(grep -Fc "gh ssh-key list" "$MARKER") == 2 ]]
+                grep -Fq "gh ssh-key add $public_key --title scope title --type authentication" "$MARKER"
+                ;;
+        esac
+    ' 2>&1) || return 1
+    case $scenario in
+        missing-no)
+            grep -Fq 'ask:GitHub CLI precisa de permissões para SSH keys. Atualizar agora?' "$marker"
+            ;;
+        refresh-fail)
+            grep -Fq 'não foi possível atualizar as permissões GitHub SSH' <<<"$output"
+            ;;
+        yes-safe)
+            ! grep -Fq 'gh auth refresh' "$marker"
+            ;;
+    esac
+}
+
+if github_scope_mock missing-no \
+    && github_scope_mock refresh-yes \
+    && github_scope_mock refresh-fail \
+    && github_scope_mock yes-safe; then
+    ok 'permissões GitHub SSH usam refresh seguro e fallback manual'
+else
+    error 'fluxo de permissões GitHub SSH falhou'
+    ((failures += 1))
+fi
+
+clipboard_mock() {
+    local scenario=$1 fake_clipboard="$ssh_test_home/clipboard-$1" output=''
+    rm -f "$fake_clipboard"
+    if [[ $scenario != none ]]; then
+        cat >"$fake_bin/wl-copy" <<EOF
+#!/usr/bin/env bash
+cat >/dev/null
+[[ $scenario == success ]]
+EOF
+        chmod +x "$fake_bin/wl-copy"
+    else
+        rm -f "$fake_bin/wl-copy"
+    fi
+    output=$(HOME="$ssh_test_home" PATH="$fake_bin:$PATH" SCENARIO="$scenario" bash -c '
+        set -Eeuo pipefail
+        source lib/log
+        source lib/ssh
+        DRY_RUN=0
+        LOG_FILE=/dev/null
+        SSH_PUBLIC_KEY="$HOME/.ssh/clipboard.pub"
+        mkdir -p "$HOME/.ssh"
+        printf "ssh-ed25519 AAAACLIP mock@example\\n" >"$SSH_PUBLIC_KEY"
+        if [[ $SCENARIO == none ]]; then
+            command_exists() { return 1; }
+        else
+            command_exists() { [[ $1 == wl-copy ]]; }
+        fi
+        print_pubkey
+    ' 2>&1) || return 1
+    case $scenario in
+        success)
+            grep -Fq '[ok] chave pública copiada para o clipboard' <<<"$output"
+            ;;
+        none|failure)
+            grep -Fq '[info] clipboard indisponível; copie a chave manualmente' <<<"$output" \
+                && ! grep -Fq '[ok] chave pública copiada para o clipboard' <<<"$output"
+            ;;
+    esac
+}
+
+if clipboard_mock none && clipboard_mock failure && clipboard_mock success; then
+    ok 'clipboard só confirma cópia quando o comando funciona'
+else
+    error 'estado do clipboard não reflete o resultado do comando'
     ((failures += 1))
 fi
 

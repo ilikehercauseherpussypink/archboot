@@ -5,6 +5,11 @@ GITHUB_KEY_TITLE=$GITHUB_KEY_TITLE_DEFAULT
 GITHUB_OLD_KEYS_STATUS='não verificadas'
 GITHUB_NEW_KEY_STATUS='não configurada'
 GH_AUTH_READY=0
+GH_SSH_KEY_LIST_READY=0
+GH_SSH_KEY_ADD_READY=0
+GH_SSH_KEY_DELETE_READY=0
+GITHUB_SSH_MANAGEMENT_STATUS='não verificada'
+GITHUB_KEYS_URL=${GITHUB_KEYS_URL:-'https://github.com/settings/keys'}
 declare -ag GITHUB_KEY_IDS=() GITHUB_KEY_TITLES=() GITHUB_KEY_VALUES=()
 declare -ag GITHUB_OLD_KEY_IDS=() GITHUB_OLD_KEY_TITLES=() GITHUB_OLD_KEY_VALUES=()
 
@@ -44,6 +49,35 @@ _github_gh_ready() {
     warn 'autenticação GitHub CLI não concluída'
     info 'tente novamente: gh auth login'
     FAILURES+=('gh:auth')
+    return 1
+}
+
+github_ssh_key_management_ready() {
+    if run_cmd 'listar SSH keys do GitHub' gh ssh-key list; then
+        GH_SSH_KEY_LIST_READY=1
+        # The same admin:public_key grant controls the list, add, and delete
+        # endpoints. Individual add/delete errors are still handled below.
+        GH_SSH_KEY_ADD_READY=1
+        GH_SSH_KEY_DELETE_READY=1
+        GITHUB_SSH_MANAGEMENT_STATUS='disponível'
+        ok 'GitHub CLI pode gerenciar SSH keys'
+        return 0
+    fi
+
+    GITHUB_SSH_MANAGEMENT_STATUS='indisponível'
+    warn 'GitHub CLI não tem permissões para gerenciar SSH keys'
+    info 'execute: gh auth refresh -h github.com -s admin:public_key'
+    return 1
+}
+
+github_refresh_ssh_key_permissions() {
+    if run_cmd 'atualizar permissões de SSH keys do GitHub' \
+        gh auth refresh -h github.com -s admin:public_key; then
+        ok 'permissões GitHub atualizadas'
+        return 0
+    fi
+    warn 'não foi possível atualizar as permissões GitHub SSH'
+    info 'tente: gh auth refresh -h github.com -s admin:public_key'
     return 1
 }
 
@@ -220,17 +254,11 @@ github_confirm_ssh_key_registration() {
 }
 
 github_manual_ssh_key() {
-    GITHUB_NEW_KEY_STATUS='fallback manual'
-    warn 'cadastro automático indisponível; use o fluxo manual'
+    GITHUB_NEW_KEY_STATUS='registro manual pendente'
+    warn 'cadastro automático de SSH no GitHub indisponível'
     print_pubkey || warn 'não foi possível mostrar a chave pública'
-    info "use este título no GitHub: $GITHUB_KEY_TITLE"
-    if yesno 'Abrir a página de chaves SSH do GitHub?' n; then
-        open_url "$GITHUB_KEYS_URL" || true
-        info 'Cole a chave pública no GitHub, salve, depois volte ao terminal.'
-        pause 'Pressione Enter para continuar.'
-    else
-        info "abra manualmente: $GITHUB_KEYS_URL"
-    fi
+    info "adicione esta chave pública no GitHub: $GITHUB_KEYS_URL"
+    info 'depois de adicionar, teste com: ssh -T git@github.com'
 }
 
 _github_prompt_key_title() {
@@ -248,16 +276,36 @@ github_register_ssh_key() {
         GITHUB_NEW_KEY_STATUS='já existia'
         return 0
     fi
-    github_confirm_ssh_key_registration || return 0
+    if ! github_confirm_ssh_key_registration; then
+        github_manual_ssh_key
+        return 0
+    fi
     _github_prompt_key_title
     github_add_ssh_key "$public_key" "$GITHUB_KEY_TITLE" || github_manual_ssh_key
 }
 
-github_offer_manual_ssh_key() {
-    if ! github_confirm_ssh_key_registration; then
-        return 0
+github_resolve_ssh_key_permissions() {
+    if (( DRY_RUN )); then
+        printf '> [dry-run] perguntaria se deve atualizar permissões de SSH keys do GitHub\n'
+        GITHUB_NEW_KEY_STATUS='dry-run: registro manual pendente'
+        GITHUB_OLD_KEYS_STATUS='não verificadas'
+        return 1
     fi
-    github_manual_ssh_key
+    if (( ${ASSUME_YES:-0} || ${CI_MODE:-0} == 1 || ${PLAN_ONLY:-0} || ${DOCTOR_ONLY:-0} )); then
+        skip 'configuração automática de SSH GitHub pulada por modo seguro'
+        github_manual_ssh_key
+        return 1
+    fi
+    if ! yesno 'GitHub CLI precisa de permissões para SSH keys. Atualizar agora?' n; then
+        skip 'configuração automática de SSH GitHub pulada'
+        github_manual_ssh_key
+        return 1
+    fi
+    github_refresh_ssh_key_permissions || {
+        github_manual_ssh_key
+        return 1
+    }
+    github_ssh_key_management_ready
 }
 
 github_manage_ssh_key() {
@@ -271,6 +319,7 @@ github_manage_ssh_key() {
 
     if (( DRY_RUN )); then
         printf '> [dry-run] listaria SSH keys cadastradas no GitHub\n'
+        printf '> [dry-run] perguntaria se deve atualizar permissões de SSH keys do GitHub\n'
         if ((${#GITHUB_KEY_VALUES[@]})) && github_key_exists "$public_key"; then
             skip 'chave GitHub já cadastrada'
             GITHUB_NEW_KEY_STATUS='já existia'
@@ -290,11 +339,18 @@ github_manage_ssh_key() {
     fi
 
     if ! _github_gh_ready; then
-        github_offer_manual_ssh_key
+        github_manual_ssh_key
         return 0
     fi
+    if ! github_ssh_key_management_ready; then
+        if ! github_resolve_ssh_key_permissions; then
+            return 0
+        fi
+    fi
     if ! github_list_ssh_keys; then
-        github_offer_manual_ssh_key
+        GITHUB_SSH_MANAGEMENT_STATUS='indisponível'
+        warn 'não foi possível carregar as SSH keys do GitHub'
+        github_manual_ssh_key
         return 0
     fi
 
@@ -317,6 +373,13 @@ github_manage_ssh_key() {
             GITHUB_OLD_KEYS_STATUS='mantidas'
             ;;
     esac
+}
+
+github_ssh_registration_ready() {
+    case ${GITHUB_NEW_KEY_STATUS:-} in
+        'já existia'|'cadastrada automaticamente via gh') return 0 ;;
+    esac
+    return 1
 }
 
 configure_gh() {

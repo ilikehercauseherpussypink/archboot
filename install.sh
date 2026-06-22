@@ -535,7 +535,11 @@ show_summary() {
     log_list 'failure' "${FAILURES[@]}"
 
     if (( failure_count == 0 )); then
-        ok 'concluído'
+        if (( ! SKIP_GITHUB )) && ! github_ssh_registration_ready; then
+            warn 'concluído com etapas manuais'
+        else
+            ok 'concluído'
+        fi
     else
         error "concluído com $failure_count falha(s)"
     fi
@@ -562,7 +566,7 @@ show_summary() {
     if (( SKIP_GITHUB )); then
         info 'GitHub SSH: desativado por flag'
     else
-        info "GitHub SSH: ${GITHUB_NEW_KEY_STATUS:-fallback manual}"
+        info "GitHub SSH: ${GITHUB_NEW_KEY_STATUS:-registro manual pendente}"
     fi
     if (( SKIP_CODEX )); then
         info 'Codex: desativado por flag'
@@ -608,8 +612,9 @@ show_summary() {
         fi
     fi
 
-    if [[ ${GITHUB_NEW_KEY_STATUS:-} == 'fallback manual' ]]; then
-        info "próximo passo: cadastre a chave em $GITHUB_KEYS_URL"
+    if (( ! SKIP_GITHUB )) && ! github_ssh_registration_ready; then
+        info "próximo passo: adicione a chave SSH em $GITHUB_KEYS_URL"
+        info 'próximo passo: teste com: ssh -T git@github.com'
     fi
     if (( CODEX_PATH_CHANGED )); then
         info 'próximo passo: abra um novo terminal para ativar o PATH do Codex'
@@ -733,7 +738,12 @@ main() {
         next_step 'GitHub'
         if (( ssh_ready )); then
             github_manage_ssh_key "$SSH_PUBLIC_KEY"
-            test_github_ssh || true
+            if github_ssh_registration_ready; then
+                test_github_ssh || true
+            else
+                SSH_GITHUB_RESULT='pendente'
+                skip 'teste SSH GitHub pulado; cadastro da chave pendente'
+            fi
         else
             skip 'GitHub SSH pulado: chave local indisponível'
             configure_gh || true

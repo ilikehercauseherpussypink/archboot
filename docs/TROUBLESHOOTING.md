@@ -86,11 +86,15 @@ systemctl status mullvad-daemon.service
 
 ```bash
 gh auth status
-gh auth login
+gh auth refresh -h github.com -s admin:public_key
+gh ssh-key list
+gh ssh-key add ~/.ssh/id_ed25519.pub --title person
 ssh -T git@github.com
 ```
 
-Local keys stay in `~/.ssh`. When automatic registration through `gh` is unavailable, use the public `.pub` path shown by the installer. Local SSH files are never deleted.
+`gh auth status` can succeed even when the active token cannot manage SSH keys. Refreshing the `admin:public_key` scope permits the list, add, and delete SSH-key operations used by `gh`.
+
+Local keys stay in `~/.ssh`. If automatic registration cannot continue, manual registration at <https://github.com/settings/keys> remains safe: add the public `.pub` key shown by the installer, then run the SSH test above. Local SSH files are never deleted.
 
 ## Codex PATH
 
