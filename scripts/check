@@ -42,7 +42,7 @@ required=(
     scripts/check scripts/github
     cloudflare/worker.js cloudflare/wrangler.toml.example cloudflare/README.md
     lib/log lib/ask lib/env lib/doctor lib/run lib/pkg lib/flatpak lib/aur lib/apps lib/service
-    lib/git lib/ssh lib/gh lib/codex lib/open
+    lib/git lib/ssh lib/gh lib/codex
     apps/pacman/base apps/pacman/dev apps/pacman/browsers apps/pacman/audio
     apps/pacman/privacy apps/pacman/system
     apps/flatpak/chat apps/flatpak/media apps/flatpak/mail
@@ -215,12 +215,12 @@ else
     error 'default LEANIN_REPO não aponta para ilikehercauseherpussypink/leanin'
     ((failures += 1))
 fi
-leanin_var_count=$(grep -Roh -- 'LEANIN_' install.sh lib | wc -l)
-legacy_var_count=$(grep -Roh -- 'ARCHBOOT_' install.sh lib | wc -l)
-if (( leanin_var_count > legacy_var_count )); then
-    ok 'LEANIN_* é primário e ARCHBOOT_* permanece apenas como compatibilidade'
+if ! rg -n 'ARCHBOOT_(REPO|BRANCH|BOOTSTRAPPED|ROOT|STATE_DIR|LOG_DIR|VERSION)' \
+    install.sh lib docs README.md >/dev/null 2>&1 \
+    && grep -Fq 'CI_MODE=${LEANIN_CI:-${ARCHBOOT_CI:-0}}' install.sh; then
+    ok 'ARCHBOOT_CI é o único alias de compatibilidade mantido'
 else
-    error 'ARCHBOOT_* ainda domina as variáveis internas'
+    error 'alias ARCHBOOT antigo permanece fora do modo CI'
     ((failures += 1))
 fi
 # Os padrões abaixo verificam texto-fonte literal, sem expansão nesta execução.
@@ -570,22 +570,6 @@ for invalid_branch in '' 'bad branch' '../main' 'feature/../main' 'main..old' \
     fi
 done
 (( invalid_bootstrap_env )) || ok 'bootstrap rejeita repositórios e branches inválidos'
-
-legacy_repo_dir="$ssh_test_home/bootstrap-legacy-repo"
-if legacy_repo_output=$(ARCHBOOT_REPO=https://github.com/owner/repo BOOTSTRAP_TEMP="$legacy_repo_dir" \
-    BOOTSTRAP_MODE=valid CURL_ARGS_FILE="$ssh_test_home/curl-legacy-repo.args" PATH="$bootstrap_bin:$PATH" \
-    bash -s -- --plan <install.sh 2>&1) \
-    && grep -Fq 'mock project loaded' <<<"$legacy_repo_output" \
-    && [[ ! -e $legacy_repo_dir ]] \
-    && ! LEANIN_REPO=https://example.com/invalid ARCHBOOT_REPO=https://github.com/owner/repo \
-        BOOTSTRAP_TEMP="$ssh_test_home/bootstrap-primary-repo" BOOTSTRAP_MODE=valid \
-        CURL_ARGS_FILE="$ssh_test_home/curl-primary-repo.args" PATH="$bootstrap_bin:$PATH" \
-        bash -s -- --plan <install.sh >/dev/null 2>&1; then
-    ok 'LEANIN_REPO tem precedência e ARCHBOOT_REPO permanece compatível'
-else
-    error 'precedência ou compatibilidade de LEANIN_REPO falhou'
-    ((failures += 1))
-fi
 
 missing_tool_bin="$ssh_test_home/missing-tool-bin"
 mkdir -p "$missing_tool_bin"
@@ -994,9 +978,11 @@ else
 fi
 
 if default_dry_output=$(LEANIN_CI=1 bash install.sh --dry-run --no-ssh --no-github 2>&1) \
-    && grep -Fq '> Etapa 10/10: resumo' <<<"$default_dry_output" \
+    && grep -Fq '> Etapa 3/7: pacotes' <<<"$default_dry_output" \
+    && grep -Fq '> Etapa 7/7: resumo' <<<"$default_dry_output" \
+    && ! grep -Fq '> Etapa 3/10: pacman base' <<<"$default_dry_output" \
     && grep -Fq '> [ok] dry-run concluído' <<<"$default_dry_output"; then
-    ok 'dry-run sem flags de fonte conclui todas as etapas ativas'
+    ok 'pacotes usam uma etapa clara e o dry-run conclui todas as etapas ativas'
 else
     error 'dry-run sem flags de fonte encerrou antes do resumo'
     controls_fail=1
@@ -1957,7 +1943,6 @@ for token in "${readme_tokens[@]}"; do
 done
 cloudflare_readme_tokens=(
     'https://shelies.org'
-    'https://archboot.jocaluvero.workers.dev'
     'https://github.com/ilikehercauseherpussypink/leanin'
 )
 for token in "${cloudflare_readme_tokens[@]}"; do
@@ -1974,7 +1959,6 @@ troubleshooting_tokens=(
     'ssh -T git@github.com'
     'tail -n 120 ~/.local/state/leanin/logs/FILE.log'
     'safe default'
-    'supervised same-terminal flow'
     '/dev/tty'
     'gh api user/keys'
     'admin:public_key'
@@ -2000,7 +1984,7 @@ if grep -Fq 'archboot' README.md; then
     error 'README.md contém branding antigo'
     docs_fail=1
 fi
-if rg -n 'github\.com/ilikehercauseherpussypink/archboot|/home/pc/archboot|docs/assets/archboot\.svg' \
+if rg -n 'archboot|github\.com/ilikehercauseherpussypink/archboot|/home/pc/archboot|docs/assets/archboot\.svg' \
     README.md docs cloudflare CHANGELOG.md >/dev/null 2>&1; then
     error 'documentação contém referência antiga ao repositório, caminho ou asset'
     docs_fail=1
