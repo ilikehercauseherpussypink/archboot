@@ -118,7 +118,8 @@ _doctor_github() {
             if gh ssh-key list >/dev/null 2>&1; then
                 ok 'GitHub SSH key management disponível'
             else
-                info 'GitHub SSH key management indisponível; use: gh auth refresh -h github.com -s admin:public_key'
+                warn 'GitHub SSH key management indisponível'
+                info 'corrija: gh auth refresh -h github.com -s admin:public_key'
             fi
         else
             info 'GitHub CLI não autenticado; use: gh auth login -h github.com -s admin:public_key'

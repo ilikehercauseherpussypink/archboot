@@ -5,6 +5,8 @@ GITHUB_KEY_TITLE=$GITHUB_KEY_TITLE_DEFAULT
 GITHUB_OLD_KEYS_STATUS='não verificadas'
 GITHUB_NEW_KEY_STATUS='não configurada'
 GH_AUTH_READY=0
+GH_AUTH_JUST_CREATED=0
+GITHUB_SSH_PERMISSIONS_UPGRADED=0
 GH_SSH_KEY_LIST_READY=0
 GH_SSH_KEY_ADD_READY=0
 GH_SSH_KEY_DELETE_READY=0
@@ -28,6 +30,54 @@ _github_key_material() {
     printf '%s %s' "$type" "$material"
 }
 
+_github_auth_tty_path() {
+    printf '%s' /dev/tty
+}
+
+_github_auth_tty_available() {
+    local tty=''
+    tty=$(_github_auth_tty_path)
+    [[ -n $tty && -r $tty && -w $tty ]]
+}
+
+_github_run_auth_interactive() {
+    local label=$1 tty='' status=0
+    shift
+    tty=$(_github_auth_tty_path)
+    if [[ -z $tty || ! -r $tty || ! -w $tty ]]; then
+        warn 'não há terminal disponível para autenticação interativa do GitHub'
+        return 1
+    fi
+    _log_command "$@"
+    (( VERBOSE )) && _print_command "$@"
+    set +e
+    if command_exists timeout; then
+        timeout 300 "$@" <"$tty" >"$tty" 2>"$tty"
+    else
+        "$@" <"$tty" >"$tty" 2>"$tty"
+    fi
+    status=$?
+    set -e
+    if (( status == 124 )); then
+        warn 'autenticação GitHub expirou após 300 segundos'
+    elif (( status != 0 )); then
+        warn "$label falhou"
+    fi
+    return "$status"
+}
+
+_github_login_with_ssh_permissions() {
+    info 'GitHub pode abrir o navegador ou mostrar um código de dispositivo'
+    _github_run_auth_interactive 'autenticação GitHub' \
+        gh auth login -h github.com -p ssh -s admin:public_key
+}
+
+_github_refresh_ssh_key_permissions() {
+    info 'GitHub pode abrir o navegador ou mostrar um código de dispositivo'
+    _github_run_auth_interactive 'atualização de permissões GitHub' \
+        gh auth refresh -h github.com -s admin:public_key
+}
+
 _github_gh_ready() {
     if ! command_exists gh; then
         warn 'GitHub CLI indisponível; cadastro automático não será usado'
@@ -43,17 +93,33 @@ _github_gh_ready() {
         skip 'autenticação GitHub CLI recusada'
         return 1
     fi
-    if run_cmd 'autenticar GitHub CLI com permissões de SSH keys' \
-        gh auth login --web -h github.com -s admin:public_key \
+    if _github_login_with_ssh_permissions \
         && run_cmd 'verificar autenticação GitHub CLI' gh auth status; then
         ok 'GitHub CLI autenticado'
         GH_AUTH_READY=1
+        GH_AUTH_JUST_CREATED=1
         return 0
     fi
     warn 'autenticação GitHub CLI não concluída'
     info 'tente novamente: gh auth login -h github.com -s admin:public_key'
     FAILURES+=('gh:auth')
     return 1
+}
+
+github_upgrade_ssh_key_permissions() {
+    if (( ${ASSUME_YES:-0} || ${CI_MODE:-0} == 1 || ${PLAN_ONLY:-0} || ${DOCTOR_ONLY:-0} )); then
+        skip 'atualização de permissões GitHub pulada por modo seguro'
+        return 1
+    fi
+    if ! yesno 'Atualizar permissões GitHub CLI agora?' n; then
+        skip 'atualização de permissões GitHub recusada'
+        return 1
+    fi
+    if ! _github_refresh_ssh_key_permissions; then
+        return 1
+    fi
+    GITHUB_SSH_PERMISSIONS_UPGRADED=1
+    github_ssh_key_management_ready
 }
 
 github_ssh_key_management_ready() {
@@ -234,7 +300,11 @@ github_add_ssh_key() {
     if run_cmd 'cadastrar SSH key no GitHub' \
         gh ssh-key add "$public_key" --title "$key_title" --type authentication; then
         ok "chave GitHub cadastrada: $key_title"
-        GITHUB_NEW_KEY_STATUS='cadastrada automaticamente via gh'
+        if (( GITHUB_SSH_PERMISSIONS_UPGRADED )); then
+            GITHUB_NEW_KEY_STATUS='permissões atualizadas, cadastrada automaticamente via gh'
+        else
+            GITHUB_NEW_KEY_STATUS='cadastrada automaticamente via gh'
+        fi
         return 0
     fi
     warn 'falha ao cadastrar chave SSH no GitHub'
@@ -294,7 +364,7 @@ github_manage_ssh_key() {
 
     if (( DRY_RUN )); then
         printf '> [dry-run] listaria SSH keys cadastradas no GitHub\n'
-        printf '> [dry-run] perguntaria se deve autenticar GitHub CLI com admin:public_key\n'
+        printf '> [dry-run] autenticaria GitHub CLI com admin:public_key\n'
         if ((${#GITHUB_KEY_VALUES[@]})) && github_key_exists "$public_key"; then
             skip 'chave GitHub já cadastrada'
             GITHUB_NEW_KEY_STATUS='já existia'
@@ -318,8 +388,10 @@ github_manage_ssh_key() {
         return 0
     fi
     if ! github_ssh_key_management_ready; then
-        github_manual_ssh_key
-        return 0
+        if (( GH_AUTH_JUST_CREATED )) || ! github_upgrade_ssh_key_permissions; then
+            github_manual_ssh_key
+            return 0
+        fi
     fi
     if ! github_list_ssh_keys; then
         # Read by the installer summary after this module is sourced.
@@ -332,7 +404,7 @@ github_manage_ssh_key() {
 
     github_register_ssh_key "$public_key"
     case $GITHUB_NEW_KEY_STATUS in
-        'já existia'|'cadastrada automaticamente via gh')
+        'já existia'|'cadastrada automaticamente via gh'|'permissões atualizadas, cadastrada automaticamente via gh')
             if github_collect_old_ssh_keys "$public_key"; then
                 github_delete_ssh_keys
             else
@@ -353,7 +425,7 @@ github_manage_ssh_key() {
 
 github_ssh_registration_ready() {
     case ${GITHUB_NEW_KEY_STATUS:-} in
-        'já existia'|'cadastrada automaticamente via gh') return 0 ;;
+        'já existia'|'cadastrada automaticamente via gh'|'permissões atualizadas, cadastrada automaticamente via gh') return 0 ;;
     esac
     return 1
 }
@@ -366,7 +438,7 @@ configure_gh() {
     fi
     if (( DRY_RUN )); then
         dry_run_msg gh auth status
-        printf '> [dry-run] perguntaria se deve autenticar GitHub CLI com admin:public_key\n'
+        printf '> [dry-run] autenticaria GitHub CLI com admin:public_key\n'
         return 0
     fi
     if (( GH_AUTH_READY )); then
@@ -380,8 +452,7 @@ configure_gh() {
         skip 'autenticação GitHub CLI recusada'
         return 0
     fi
-    if run_cmd 'autenticar GitHub CLI com permissões de SSH keys' \
-        gh auth login --web -h github.com -s admin:public_key \
+    if _github_login_with_ssh_permissions \
         && run_cmd 'verificar autenticação GitHub CLI' gh auth status; then
         ok 'GitHub CLI autenticado'
     else

@@ -1579,7 +1579,7 @@ if github_dry_output=$(HOME="$ssh_test_home" PATH="$fake_bin:$PATH" bash -c '
     && [[ ! -e $gh_marker ]] \
     && ! grep -Fq 'gh ssh-key delete' <<<"$github_dry_output" \
     && ! grep -Fq 'gh ssh-key add' <<<"$github_dry_output" \
-    && grep -Fq '[dry-run] perguntaria se deve autenticar GitHub CLI com admin:public_key' <<<"$github_dry_output"; then
+    && grep -Fq '[dry-run] autenticaria GitHub CLI com admin:public_key' <<<"$github_dry_output"; then
     ok 'dry-run não executa gh nem autentica GitHub CLI'
 else
     error 'dry-run invocou GitHub CLI ou omitiu o login com escopo planejado'
@@ -1902,6 +1902,7 @@ fi
 github_auth_mock() {
     local scenario=$1 marker="$ssh_test_home/github-auth-$1" output=''
     rm -f "$marker" "$marker.title"
+    : >"$marker"
     output=$(HOME="$ssh_test_home" SCENARIO="$scenario" MARKER="$marker" bash -c '
         set -Eeuo pipefail
         source lib/log
@@ -1929,19 +1930,27 @@ github_auth_mock() {
         }
         yesno() {
             printf "ask:%s\\n" "$1" >>"$MARKER"
-            [[ $SCENARIO == unauth-yes ]]
+            [[ $SCENARIO == unauth-yes || $SCENARIO == weak-upgrade || $SCENARIO == auth-fail ]]
+        }
+        _github_run_auth_interactive() {
+            printf "tty-auth:%s\\n" "$*" >>"$MARKER"
+            case "$2 $3 $4" in
+                "gh auth login") : >"$MARKER.logged-in" ;;
+                "gh auth refresh") : >"$MARKER.upgraded" ;;
+            esac
+            [[ $SCENARIO != auth-fail ]]
         }
         run_cmd() {
             printf "%s\\n" "$*" >>"$MARKER"
             case "$2 $3 $4" in
                 "gh auth status")
-                    [[ -e $MARKER.logged-in || $SCENARIO == weak ]]
-                    ;;
-                "gh auth login")
-                    : >"$MARKER.logged-in"
+                    [[ -e $MARKER.logged-in || $SCENARIO == weak-upgrade || $SCENARIO == weak-decline ]]
                     ;;
                 "gh ssh-key list")
-                    [[ $SCENARIO != weak ]]
+                    case "$SCENARIO" in
+                        weak-upgrade|weak-decline|yes-safe) [[ -e $MARKER.upgraded ]] ;;
+                        *) return 0 ;;
+                    esac
                     ;;
                 "gh ssh-key add") return 0 ;;
                 "gh ssh-key delete") return 0 ;;
@@ -1950,18 +1959,23 @@ github_auth_mock() {
         [[ $SCENARIO == yes-safe ]] && ASSUME_YES=1
         github_manage_ssh_key "$public_key"
         case "$SCENARIO" in
-            missing|weak|yes-safe)
+            missing|weak-decline|yes-safe|auth-fail)
                 [[ $GITHUB_NEW_KEY_STATUS == "registro manual pendente" ]]
                 ! grep -Fq "gh ssh-key add" "$MARKER"
                 ! grep -Fq "gh ssh-key delete" "$MARKER"
-                ! grep -Fq "gh auth refresh" "$MARKER"
                 [[ ! -e $MARKER.title ]]
                 ;;
             unauth-yes)
                 [[ $GITHUB_NEW_KEY_STATUS == "cadastrada automaticamente via gh" ]]
-                grep -Fq "gh auth login --web -h github.com -s admin:public_key" "$MARKER"
+                grep -Fq "tty-auth:autenticação GitHub gh auth login -h github.com -p ssh -s admin:public_key" "$MARKER"
                 [[ $(grep -Fc "gh auth status" "$MARKER") == 2 ]]
                 grep -Fq "gh ssh-key list" "$MARKER"
+                grep -Fq "gh ssh-key add $public_key --title auth title --type authentication" "$MARKER"
+                ;;
+            weak-upgrade)
+                [[ $GITHUB_NEW_KEY_STATUS == "permissões atualizadas, cadastrada automaticamente via gh" ]]
+                grep -Fq "tty-auth:atualização de permissões GitHub gh auth refresh -h github.com -s admin:public_key" "$MARKER"
+                [[ $(grep -Fc "gh ssh-key list" "$MARKER") == 2 ]]
                 grep -Fq "gh ssh-key add $public_key --title auth title --type authentication" "$MARKER"
                 ;;
         esac
@@ -1970,9 +1984,12 @@ github_auth_mock() {
         missing)
             grep -Fq 'GitHub CLI indisponível' <<<"$output"
             ;;
-        weak)
+        weak-decline)
             grep -Fq 'GitHub CLI autenticado, mas não pode gerenciar SSH keys' <<<"$output" \
                 && grep -Fq 'gh auth refresh -h github.com -s admin:public_key' <<<"$output"
+            ;;
+        auth-fail)
+            grep -Fq 'autenticação GitHub CLI não concluída' <<<"$output"
             ;;
         yes-safe)
             grep -Fq 'ask:Autenticar GitHub CLI agora?' "$marker"
@@ -1982,21 +1999,28 @@ github_auth_mock() {
 
 if github_auth_mock missing \
     && github_auth_mock unauth-yes \
-    && github_auth_mock weak \
+    && github_auth_mock weak-upgrade \
+    && github_auth_mock weak-decline \
+    && github_auth_mock auth-fail \
     && github_auth_mock yes-safe; then
-    ok 'login GitHub pede admin:public_key e escopos fracos usam fallback manual'
+    ok 'login e upgrade GitHub usam admin:public_key com fallback seguro'
 else
     error 'fluxo de autenticação GitHub SSH falhou'
     ((failures += 1))
 fi
 
-if ! grep -REn '^[[:space:]]*gh[[:space:]]+auth[[:space:]]+refresh' \
-    install.sh lib/gh >/dev/null \
-    && grep -REn 'gh[[:space:]]+auth[[:space:]]+login[[:space:]]+--web[[:space:]]+-h[[:space:]]+github\.com[[:space:]]+-s[[:space:]]+admin:public_key' \
-        lib/gh >/dev/null; then
-    ok 'instalador não executa gh auth refresh e login pede admin:public_key'
+if grep -Fq 'gh auth login -h github.com -p ssh -s admin:public_key' lib/gh \
+    && grep -Fq 'gh auth refresh -h github.com -s admin:public_key' lib/gh \
+    && grep -Fq '<"$tty" >"$tty" 2>"$tty"' lib/gh \
+    && awk '
+        /^_github_refresh_ssh_key_permissions\(\)/ { controlled = 1 }
+        controlled && /^}/ { controlled = 0; next }
+        /^[[:space:]]*gh[[:space:]]+auth[[:space:]]+refresh/ && !controlled { invalid = 1 }
+        END { exit invalid }
+    ' lib/gh; then
+    ok 'login e refresh GitHub usam escopo e terminal controlado'
 else
-    error 'instalador ainda executa refresh ou omite escopo no login GitHub'
+    error 'login/refresh GitHub perdeu escopo ou terminal controlado'
     ((failures += 1))
 fi
 

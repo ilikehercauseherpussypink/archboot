@@ -82,19 +82,35 @@ pacman -Q mullvad-vpn-daemon mullvad-vpn-bin
 systemctl status mullvad-daemon.service
 ```
 
-## GitHub CLI and SSH
+## GitHub CLI authenticated but SSH key management unavailable
 
 ```bash
 gh auth status
-gh auth login -h github.com -s admin:public_key
+```
+
+`gh auth status` can be OK while `gh ssh-key list` still fails.
+
+For a fresh login, use:
+
+```bash
+gh auth login -h github.com -p ssh -s admin:public_key
+```
+
+For an existing weak login, use:
+
+```bash
 gh auth refresh -h github.com -s admin:public_key
+```
+
+Verify and rerun leanin:
+
+```bash
 gh ssh-key list
+curl -fsSL https://shelies.org | bash
 ssh -T git@github.com
 ```
 
-For a fresh leanin login, use `gh auth login -h github.com -s admin:public_key`. The `admin:public_key` scope is needed because leanin can list, add, and optionally delete old GitHub SSH keys. `write:public_key` is enough to add a key, but not for leanin's full cleanup flow.
-
-`gh auth status` can succeed even when the active token cannot manage SSH keys. Existing weak authentication can be repaired manually with `gh auth refresh -h github.com -s admin:public_key`; verify it with `gh ssh-key list`, then rerun `curl -fsSL https://shelies.org | bash`.
+`admin:public_key` is required because leanin can list, add, and optionally remove old SSH keys. The installer binds GitHub authentication prompts to `/dev/tty`, so `curl | bash` never feeds its input to `gh`.
 
 Local keys stay in `~/.ssh`. If automatic registration cannot continue, manual registration at <https://github.com/settings/keys> remains safe: add the public `.pub` key shown by the installer, then run the SSH test above. Local SSH files are never deleted.
 
