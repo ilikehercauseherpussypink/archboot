@@ -2,26 +2,13 @@
 set -Eeuo pipefail
 
 LEANIN_VERSION='0.1.1'
-# LEANIN_* is primary. ARCHBOOT_* remains a temporary compatibility alias.
-if [[ -v LEANIN_REPO ]]; then
-    :
-elif [[ -v ARCHBOOT_REPO ]]; then
-    LEANIN_REPO=$ARCHBOOT_REPO
-else
+if [[ ! -v LEANIN_REPO ]]; then
     LEANIN_REPO=https://github.com/ilikehercauseherpussypink/leanin
 fi
-if [[ -v LEANIN_BRANCH ]]; then
-    :
-elif [[ -v ARCHBOOT_BRANCH ]]; then
-    LEANIN_BRANCH=$ARCHBOOT_BRANCH
-else
+if [[ ! -v LEANIN_BRANCH ]]; then
     LEANIN_BRANCH=main
 fi
-LEANIN_BOOTSTRAPPED=${LEANIN_BOOTSTRAPPED:-${ARCHBOOT_BOOTSTRAPPED:-0}}
-ARCHBOOT_VERSION=${ARCHBOOT_VERSION:-$LEANIN_VERSION}
-ARCHBOOT_REPO=${ARCHBOOT_REPO:-$LEANIN_REPO}
-ARCHBOOT_BRANCH=${ARCHBOOT_BRANCH:-$LEANIN_BRANCH}
-ARCHBOOT_BOOTSTRAPPED=${ARCHBOOT_BOOTSTRAPPED:-$LEANIN_BOOTSTRAPPED}
+LEANIN_BOOTSTRAPPED=${LEANIN_BOOTSTRAPPED:-0}
 
 initial_banner() {
     local plan_mode=${1:-0}
@@ -114,8 +101,7 @@ bootstrap_project() {
         script_dir=$(cd -- "$script_dir" && pwd)
         if [[ -d $script_dir/lib && -d $script_dir/apps && -d $script_dir/services ]]; then
             LEANIN_ROOT=$script_dir
-            ARCHBOOT_ROOT=$LEANIN_ROOT
-            export LEANIN_ROOT ARCHBOOT_ROOT
+            export LEANIN_ROOT
             return 0
         fi
     fi
@@ -253,8 +239,6 @@ source "$LEANIN_ROOT/lib/aur"
 source "$LEANIN_ROOT/lib/codex"
 # shellcheck source=lib/git
 source "$LEANIN_ROOT/lib/git"
-# shellcheck source=lib/open
-source "$LEANIN_ROOT/lib/open"
 # shellcheck source=lib/ssh
 source "$LEANIN_ROOT/lib/ssh"
 # shellcheck source=lib/gh
@@ -453,16 +437,7 @@ load_plan() {
 
 calculate_total_steps() {
     TOTAL_STEPS=3 # sistema, plano e resumo
-    if (( ! SKIP_PACMAN && ${#PACMAN_CORE[@]} > 0 )); then
-        ((TOTAL_STEPS += 1))
-    fi
-    if (( ! SKIP_FLATPAK )); then
-        ((TOTAL_STEPS += 1))
-    fi
-    if (( ! SKIP_PACMAN && ${#PACMAN_REST[@]} > 0 )); then
-        ((TOTAL_STEPS += 1))
-    fi
-    if (( ! SKIP_AUR && ${#AUR_APPS[@]} > 0 )); then
+    if packages_enabled; then
         ((TOTAL_STEPS += 1))
     fi
     if (( ! SKIP_SERVICES && (${#SYSTEM_SERVICES[@]} + ${#USER_SERVICES[@]} > 0) )); then
@@ -479,6 +454,34 @@ calculate_total_steps() {
     fi
     if (( ! SKIP_GITHUB )); then
         ((TOTAL_STEPS += 1))
+    fi
+}
+
+packages_enabled() {
+    (( (!SKIP_PACMAN && (${#PACMAN_CORE[@]} + ${#PACMAN_REST[@]} > 0)) \
+        || !SKIP_FLATPAK || (!SKIP_AUR && ${#AUR_APPS[@]} > 0) ))
+}
+
+install_packages() {
+    if (( ! SKIP_PACMAN && ${#PACMAN_CORE[@]} > 0 )); then
+        pacman_install "${PACMAN_CORE[@]}"
+    fi
+    if (( ! SKIP_FLATPAK )); then
+        flatpak_setup || true
+        flatpak_install "${FLATPAK_APPS[@]}"
+    fi
+    if (( ! SKIP_PACMAN && ${#PACMAN_REST[@]} > 0 )); then
+        pacman_install "${PACMAN_REST[@]}"
+    fi
+    if (( ! SKIP_AUR && ${#AUR_APPS[@]} > 0 )); then
+        if (( ! PACMAN_BLOCKED )) && ! detect; then
+            if yesno 'Nenhum AUR helper encontrado. Instalar paru?' n; then
+                bootstrap_paru || true
+            else
+                skip 'instalação de AUR helper recusada'
+            fi
+        fi
+        install "${AUR_APPS[@]}"
     fi
 }
 
@@ -707,36 +710,9 @@ main() {
     print_services_plan
     print_disabled_plan
 
-    if (( ! SKIP_PACMAN && ${#PACMAN_CORE[@]} > 0 )); then
-        next_step 'pacman base'
-        pacman_install "${PACMAN_CORE[@]}"
-    fi
-
-    if (( ! SKIP_FLATPAK )); then
-        next_step 'Flatpak'
-        flatpak_setup || true
-        flatpak_install "${FLATPAK_APPS[@]}"
-    fi
-
-    if (( ! SKIP_PACMAN && ${#PACMAN_REST[@]} > 0 )); then
-        next_step 'pacman apps'
-        pacman_install "${PACMAN_REST[@]}"
-    fi
-
-    if (( ! SKIP_AUR && ${#AUR_APPS[@]} > 0 )); then
-        next_step 'AUR'
-        if (( PACMAN_BLOCKED )); then
-            install "${AUR_APPS[@]}"
-        elif ! detect; then
-            if yesno 'Nenhum AUR helper encontrado. Instalar paru?' n; then
-                bootstrap_paru || true
-            else
-                skip 'instalação de AUR helper recusada'
-            fi
-            install "${AUR_APPS[@]}"
-        else
-            install "${AUR_APPS[@]}"
-        fi
+    if packages_enabled; then
+        next_step 'pacotes'
+        install_packages
     fi
 
     if (( ! SKIP_SERVICES && (${#SYSTEM_SERVICES[@]} + ${#USER_SERVICES[@]} > 0) )); then

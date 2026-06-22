@@ -73,10 +73,6 @@ run_sudo() {
     run_cmd "$label" "$sudo_bin" -- "$@"
 }
 
-run_quiet() {
-    run_cmd "$@"
-}
-
 run_capture() {
     local variable=${1:-} label=${2:-}
     local captured_output='' status=0
