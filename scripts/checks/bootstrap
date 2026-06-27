@@ -1,0 +1,316 @@
+# shellcheck shell=bash
+step 6 11 'validando bootstrap remoto'
+# Shared temporary home initialized by scripts/checks/common before this module is sourced.
+ssh_test_home=${ssh_test_home:?}
+# Os tokens verificam texto-fonte literal, sem expansão nesta execução.
+# shellcheck disable=SC2016
+bootstrap_tokens=(
+    'temp_dir=$(mktemp -d)'
+    '[[ ! -s $archive ]]'
+    'trap cleanup_bootstrap EXIT'
+    'validate_bootstrap_repo "$LEANIN_REPO"'
+    'validate_bootstrap_branch "$LEANIN_BRANCH"'
+    'curl -fsSL --retry 3 --connect-timeout 10 --max-time 120'
+    'tar -tzf "$archive"'
+    'tar -xzf "$archive" --no-same-owner --no-same-permissions'
+    'if ((${#roots[@]} != 1))'
+    '((${#FAILURES[@]} == 0))'
+)
+for token in "${bootstrap_tokens[@]}"; do
+    if ! grep -Fq "$token" install.sh lib/control; then
+        error "bootstrap sem proteção esperada: $token"
+        ((failures += 1))
+    fi
+done
+
+bootstrap_bin="$ssh_test_home/bootstrap-bin"
+mkdir -p "$bootstrap_bin"
+cat >"$bootstrap_bin/mktemp" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p "$BOOTSTRAP_TEMP"
+printf '%s\n' "$BOOTSTRAP_TEMP"
+EOF
+cat >"$bootstrap_bin/curl" <<'EOF'
+#!/usr/bin/env bash
+output=''
+printf '%s\n' "$@" >"$CURL_ARGS_FILE"
+while (($#)); do
+    if [[ $1 == -o ]]; then
+        output=$2
+        shift 2
+    else
+        shift
+    fi
+done
+[[ -n $output ]] || exit 2
+case $BOOTSTRAP_MODE in
+    curlfail) exit 22 ;;
+    empty) : >"$output" ;;
+    small) head -c 512 /dev/zero >"$output" ;;
+    *) head -c 2048 /dev/zero >"$output" ;;
+esac
+EOF
+cat >"$bootstrap_bin/tar" <<'EOF'
+#!/usr/bin/env bash
+destination=''
+if [[ $1 == -tzf ]]; then
+    case $BOOTSTRAP_MODE in
+        incomplete)
+            printf 'leanin-main/\nleanin-main/install.sh\n'
+            ;;
+        multiple)
+            printf '%s\n' \
+                'leanin-main/install.sh' 'leanin-main/lib/' 'leanin-main/apps/' 'leanin-main/services/' \
+                'other/install.sh' 'other/lib/' 'other/apps/' 'other/services/'
+            ;;
+        traversal)
+            printf '../outside/install.sh\n'
+            ;;
+        outside)
+            printf '%s\n' 'leanin-main/install.sh' 'leanin-main/lib/' 'leanin-main/apps/' 'leanin-main/services/'
+            ;;
+        valid)
+            printf '%s\n' 'leanin-main/install.sh' 'leanin-main/lib/' 'leanin-main/apps/' 'leanin-main/services/'
+            ;;
+        *) exit 2 ;;
+    esac
+    exit 0
+fi
+while (($#)); do
+    if [[ $1 == -C ]]; then
+        destination=$2
+        shift 2
+    else
+        shift
+    fi
+done
+[[ -n $destination ]] || exit 2
+mkdir -p "$destination"
+if [[ $BOOTSTRAP_MODE == outside ]]; then
+    mkdir -p "$BOOTSTRAP_OUTSIDE"
+    ln -s "$BOOTSTRAP_OUTSIDE" "$destination/leanin-main"
+    exit 0
+fi
+mkdir -p "$destination/leanin-main"
+printf '#!/usr/bin/env bash\nprintf "mock project loaded\\n"\n' \
+    >"$destination/leanin-main/install.sh"
+if [[ $BOOTSTRAP_MODE == valid ]]; then
+    mkdir -p "$destination/leanin-main/lib" \
+        "$destination/leanin-main/apps" "$destination/leanin-main/services"
+fi
+EOF
+chmod +x "$bootstrap_bin/mktemp" "$bootstrap_bin/curl" "$bootstrap_bin/tar"
+
+bootstrap_empty_dir="$ssh_test_home/bootstrap-empty"
+if bootstrap_empty_output=$(BOOTSTRAP_TEMP="$bootstrap_empty_dir" BOOTSTRAP_MODE=empty \
+    CURL_ARGS_FILE="$ssh_test_home/curl-empty.args" \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou tarball vazio'
+    ((failures += 1))
+elif grep -Fq 'tarball baixado está vazio' <<<"$bootstrap_empty_output" \
+    && [[ ! -e $bootstrap_empty_dir ]]; then
+    ok 'bootstrap rejeita tarball vazio e limpa temporário'
+else
+    error 'bootstrap vazio falhou sem mensagem ou limpeza esperada'
+    ((failures += 1))
+fi
+
+bootstrap_small_dir="$ssh_test_home/bootstrap-small"
+if bootstrap_small_output=$(BOOTSTRAP_TEMP="$bootstrap_small_dir" BOOTSTRAP_MODE=small \
+    CURL_ARGS_FILE="$ssh_test_home/curl-small.args" \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou tarball pequeno demais'
+    ((failures += 1))
+elif grep -Fq 'tarball inválido: arquivo menor que 1 KiB' <<<"$bootstrap_small_output" \
+    && [[ ! -e $bootstrap_small_dir ]]; then
+    ok 'bootstrap rejeita tarball pequeno demais e limpa temporário'
+else
+    error 'bootstrap pequeno falhou sem mensagem ou limpeza esperada'
+    ((failures += 1))
+fi
+
+bootstrap_curlfail_dir="$ssh_test_home/bootstrap-curlfail"
+if bootstrap_curlfail_output=$(BOOTSTRAP_TEMP="$bootstrap_curlfail_dir" BOOTSTRAP_MODE=curlfail \
+    CURL_ARGS_FILE="$ssh_test_home/curl-curlfail.args" \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou falha de curl'
+    ((failures += 1))
+elif grep -Fq 'falha ao baixar o tarball' <<<"$bootstrap_curlfail_output" \
+    && [[ ! -e $bootstrap_curlfail_dir ]]; then
+    ok 'bootstrap trata falha de curl e limpa temporário'
+else
+    error 'falha de curl não foi tratada com segurança'
+    ((failures += 1))
+fi
+
+bootstrap_incomplete_dir="$ssh_test_home/bootstrap-incomplete"
+if bootstrap_incomplete_output=$(BOOTSTRAP_TEMP="$bootstrap_incomplete_dir" BOOTSTRAP_MODE=incomplete \
+    CURL_ARGS_FILE="$ssh_test_home/curl-incomplete.args" \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou tarball sem estrutura modular'
+    ((failures += 1))
+elif grep -Fq 'diretório lib/ ausente ou inválido no tarball' <<<"$bootstrap_incomplete_output" \
+    && [[ ! -e $bootstrap_incomplete_dir ]]; then
+    ok 'bootstrap rejeita estrutura incompleta e limpa temporário'
+else
+    error 'bootstrap incompleto falhou sem mensagem ou limpeza esperada'
+    ((failures += 1))
+fi
+
+bootstrap_tarfail_dir="$ssh_test_home/bootstrap-tarfail"
+if bootstrap_tarfail_output=$(BOOTSTRAP_TEMP="$bootstrap_tarfail_dir" BOOTSTRAP_MODE=tarfail \
+    CURL_ARGS_FILE="$ssh_test_home/curl-tarfail.args" \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou falha de tar'
+    ((failures += 1))
+elif grep -Fq 'tarball inválido ou corrompido' <<<"$bootstrap_tarfail_output" \
+    && [[ ! -e $bootstrap_tarfail_dir ]]; then
+    ok 'bootstrap trata falha de tar e limpa temporário'
+else
+    error 'falha de tar não foi tratada com segurança'
+    ((failures += 1))
+fi
+
+bootstrap_multiple_dir="$ssh_test_home/bootstrap-multiple"
+if bootstrap_multiple_output=$(BOOTSTRAP_TEMP="$bootstrap_multiple_dir" BOOTSTRAP_MODE=multiple \
+    CURL_ARGS_FILE="$ssh_test_home/curl-multiple.args" \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou múltiplos diretórios raiz'
+    ((failures += 1))
+elif grep -Fq 'tarball deve conter exatamente um diretório raiz' <<<"$bootstrap_multiple_output" \
+    && [[ ! -e $bootstrap_multiple_dir ]]; then
+    ok 'bootstrap rejeita múltiplos candidatos e limpa temporário'
+else
+    error 'bootstrap múltiplo falhou sem mensagem ou limpeza esperada'
+    ((failures += 1))
+fi
+
+bootstrap_traversal_dir="$ssh_test_home/bootstrap-traversal"
+if bootstrap_traversal_output=$(BOOTSTRAP_TEMP="$bootstrap_traversal_dir" BOOTSTRAP_MODE=traversal \
+    CURL_ARGS_FILE="$ssh_test_home/curl-traversal.args" \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou path traversal no tarball'
+    ((failures += 1))
+elif grep -Fq 'tarball contém caminho inseguro' <<<"$bootstrap_traversal_output" \
+    && [[ ! -e $bootstrap_traversal_dir ]]; then
+    ok 'bootstrap rejeita path traversal e limpa temporário'
+else
+    error 'bootstrap traversal falhou sem mensagem ou limpeza esperada'
+    ((failures += 1))
+fi
+
+bootstrap_outside_dir="$ssh_test_home/bootstrap-outside"
+bootstrap_outside_target="$ssh_test_home/outside-target"
+if bootstrap_outside_output=$(BOOTSTRAP_TEMP="$bootstrap_outside_dir" BOOTSTRAP_MODE=outside \
+    BOOTSTRAP_OUTSIDE="$bootstrap_outside_target" CURL_ARGS_FILE="$ssh_test_home/curl-outside.args" \
+    PATH="$bootstrap_bin:$PATH" bash -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou raiz extraída por symlink para fora do temporário'
+    ((failures += 1))
+elif grep -Fq 'estrutura extraída inválida' <<<"$bootstrap_outside_output" \
+    && [[ ! -e $bootstrap_outside_dir ]]; then
+    ok 'bootstrap rejeita candidato fora do temporário'
+else
+    error 'bootstrap externo falhou sem mensagem ou limpeza esperada'
+    ((failures += 1))
+fi
+
+bootstrap_valid_dir="$ssh_test_home/bootstrap-valid"
+curl_args="$ssh_test_home/curl-valid.args"
+if bootstrap_valid_output=$(BOOTSTRAP_TEMP="$bootstrap_valid_dir" BOOTSTRAP_MODE=valid \
+    CURL_ARGS_FILE="$curl_args" PATH="$bootstrap_bin:$PATH" \
+    bash -s -- --plan <install.sh 2>&1) \
+    && grep -Fq 'mock project loaded' <<<"$bootstrap_valid_output" \
+    && grep -Fxq -- '--retry' "$curl_args" \
+    && grep -Fxq -- '3' "$curl_args" \
+    && grep -Fxq -- '--connect-timeout' "$curl_args" \
+    && grep -Fxq -- '10' "$curl_args" \
+    && grep -Fxq -- '--max-time' "$curl_args" \
+    && grep -Fxq -- '120' "$curl_args" \
+    && [[ ! -e $bootstrap_valid_dir ]]; then
+    ok 'bootstrap válido usa retry/timeouts, reexecuta e limpa temporário'
+else
+    error 'bootstrap válido não respeitou download, execução ou cleanup esperados'
+    ((failures += 1))
+fi
+
+invalid_bootstrap_env=0
+for invalid_repo in '' \
+    'http://github.com/owner/repo' \
+    'https://example.com/owner/repo' \
+    'https://github.com/owner/repo;echo' \
+    'https://github.com/owner/repo with-space' \
+    'https://github.com/owner/repo|cat' \
+    "https://github.com/owner/\$repo" \
+    'https://github.com/owner/repo/extra'; do
+    if LEANIN_REPO=$invalid_repo BOOTSTRAP_MODE=valid \
+        BOOTSTRAP_TEMP="$ssh_test_home/bootstrap-invalid-repo" \
+        CURL_ARGS_FILE="$ssh_test_home/curl-invalid-repo.args" PATH="$bootstrap_bin:$PATH" \
+        bash -s -- --plan <install.sh >/dev/null 2>&1; then
+        error "bootstrap aceitou LEANIN_REPO inválido: $invalid_repo"
+        ((failures += 1))
+        invalid_bootstrap_env=1
+    fi
+done
+
+for invalid_branch in '' 'bad branch' '../main' 'feature/../main' 'main..old' \
+    'main;echo' 'main|cat' "main\$branch" 'feature//test'; do
+    if LEANIN_BRANCH=$invalid_branch BOOTSTRAP_MODE=valid \
+        BOOTSTRAP_TEMP="$ssh_test_home/bootstrap-invalid-branch" \
+        CURL_ARGS_FILE="$ssh_test_home/curl-invalid-branch.args" PATH="$bootstrap_bin:$PATH" \
+        bash -s -- --plan <install.sh >/dev/null 2>&1; then
+        error "bootstrap aceitou LEANIN_BRANCH inválida: ${invalid_branch:-<vazia>}"
+        ((failures += 1))
+        invalid_bootstrap_env=1
+    fi
+done
+(( invalid_bootstrap_env )) || ok 'bootstrap rejeita repositórios e branches inválidos'
+
+missing_tool_bin="$ssh_test_home/missing-tool-bin"
+mkdir -p "$missing_tool_bin"
+ln -s "$(type -P bash)" "$missing_tool_bin/bash"
+if missing_curl_output=$(PATH="$missing_tool_bin" "$missing_tool_bin/bash" -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou ausência de curl'
+    ((failures += 1))
+elif grep -Fq 'curl é necessário para baixar o projeto completo' <<<"$missing_curl_output"; then
+    ok 'bootstrap informa ausência de curl'
+else
+    error 'ausência de curl falhou sem mensagem clara'
+    ((failures += 1))
+fi
+
+ln -s "$(type -P curl)" "$missing_tool_bin/curl"
+if missing_tar_output=$(PATH="$missing_tool_bin" "$missing_tool_bin/bash" -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou ausência de tar'
+    ((failures += 1))
+elif grep -Fq 'tar é necessário para extrair o projeto completo' <<<"$missing_tar_output"; then
+    ok 'bootstrap informa ausência de tar'
+else
+    error 'ausência de tar falhou sem mensagem clara'
+    ((failures += 1))
+fi
+
+ln -s "$(type -P tar)" "$missing_tool_bin/tar"
+if missing_mktemp_output=$(PATH="$missing_tool_bin" "$missing_tool_bin/bash" -s -- --plan <install.sh 2>&1); then
+    error 'bootstrap aceitou ausência de mktemp'
+    ((failures += 1))
+elif grep -Fq 'mktemp é necessário para criar um diretório temporário seguro' <<<"$missing_mktemp_output"; then
+    ok 'bootstrap informa ausência de mktemp'
+else
+    error 'ausência de mktemp falhou sem mensagem clara'
+    ((failures += 1))
+fi
+
+local_curl_marker="$ssh_test_home/local-curl-called"
+cat >"$bootstrap_bin/curl" <<EOF
+#!/usr/bin/env bash
+touch "$local_curl_marker"
+exit 90
+EOF
+chmod +x "$bootstrap_bin/curl"
+if PATH="$bootstrap_bin:$PATH" bash install.sh --plan >/dev/null 2>&1 \
+    && [[ ! -e $local_curl_marker ]]; then
+    ok '--plan local não aciona bootstrap remoto'
+else
+    error '--plan local tentou usar curl/bootstrap remoto'
+    ((failures += 1))
+fi

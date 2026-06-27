@@ -1,0 +1,214 @@
+# shellcheck shell=bash
+step 5 11 'validando regras de segurança'
+# Shared temporary home initialized by scripts/checks/common before this module is sourced.
+ssh_test_home=${ssh_test_home:?}
+forbidden_step=$(printf '%s%s' '==' '>')
+if grep -RFn --exclude-dir=.git -- "$forbidden_step" . >/dev/null 2>&1; then
+    error "prefixo proibido encontrado: $forbidden_step"
+    ((failures += 1))
+else
+    ok 'prefixo de etapas válido'
+fi
+if grep -En 'git[[:space:]]+(diff|status)' install.sh >/dev/null 2>&1; then
+    error 'install.sh contém git diff ou git status'
+    ((failures += 1))
+else
+    ok 'install.sh não imprime diff/status'
+fi
+# Os padrões abaixo verificam texto-fonte literal, sem expansão nesta execução.
+# shellcheck disable=SC2016
+if grep -Fq 'LEANIN_STATE_DIR="$state_home/leanin"' lib/env \
+    && grep -Fq 'LEANIN_LOG_DIR="$LEANIN_STATE_DIR/logs"' lib/env; then
+    ok 'estado e logs usam ~/.local/state/leanin'
+else
+    error 'estado ou logs não usam o caminho leanin'
+    ((failures += 1))
+fi
+unsafe_eval=$(printf '%s%s' 'eval' '[[:space:]]')
+if grep -REn "^[[:space:]]*$unsafe_eval" install.sh lib scripts cloudflare >/dev/null 2>&1; then
+    error 'eval inseguro encontrado'
+    ((failures += 1))
+else
+    ok 'nenhum eval inseguro encontrado'
+fi
+
+unsafe_cleanup=0
+while IFS= read -r cleanup_line; do
+    # Os padrões verificam texto-fonte literal, sem expansão nesta execução.
+    # shellcheck disable=SC2016
+    case $cleanup_line in
+        *'rm -rf -- "$temp_dir"'*|*'rm -rf -- "$build_dir"'*) ;;
+        *)
+            error "remoção recursiva não reconhecida: $cleanup_line"
+            unsafe_cleanup=1
+            ;;
+    esac
+done < <(grep -REn 'rm[[:space:]]+-rf' install.sh lib scripts/github 2>/dev/null || true)
+if (( unsafe_cleanup )); then
+    ((failures += 1))
+else
+    ok 'remoções temporárias usam diretórios conhecidos e delimitador --'
+fi
+if grep -REn '(chmod|chown)[[:space:]]+(-[[:alnum:]]*R|--recursive)' \
+    install.sh lib scripts/github >/dev/null 2>&1; then
+    error 'chmod/chown recursivo encontrado'
+    ((failures += 1))
+else
+    ok 'nenhum chmod/chown recursivo encontrado'
+fi
+if grep -Fq 'https://archlinux.org/ >/dev/null 2>&1' lib/env; then
+    ok 'preflight de internet não vaza saída crua do curl'
+else
+    error 'preflight de internet pode vazar saída crua do curl'
+    ((failures += 1))
+fi
+if grep -REn 'curl[^|]*\|[[:space:]]*(bash|sh)|wget[^|]*\|[[:space:]]*(bash|sh)' \
+    install.sh lib scripts/github .github cloudflare/worker.js >/dev/null 2>&1; then
+    error 'pipe remoto para shell encontrado no código executável'
+    ((failures += 1))
+else
+    ok 'nenhum curl/wget pipe shell interno encontrado'
+fi
+if grep -REn 'git[[:space:]]+(push|tag)[^#]*--force|git[[:space:]]+tag[[:space:]]+-f' \
+    install.sh lib scripts/github .github >/dev/null 2>&1; then
+    error 'operação Git forçada encontrada'
+    ((failures += 1))
+else
+    ok 'nenhum git push/tag forçado encontrado'
+fi
+if grep -REn '(rm|unlink)[^#]*/var/lib/pacman/db\.lck' \
+    install.sh lib scripts/github >/dev/null 2>&1; then
+    error 'remoção automática do lock do pacman encontrada'
+    ((failures += 1))
+else
+    ok 'lock do pacman nunca é removido automaticamente'
+fi
+redaction_log="$ssh_test_home/redaction.log"
+if redaction_output=$(bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/run
+    DRY_RUN=0
+    VERBOSE=0
+    LOG_FILE=$1
+    github_token="gh""p_TESTTOKEN123"
+    fine_token="github_""pat_TESTTOKEN456"
+    slack_token="xox""b-123456-secret"
+    authorization="Authorization: ""Bearer $github_token"
+    private_begin="-----BEGIN OPENSSH PRIVATE ""KEY-----"
+    private_end="-----END OPENSSH PRIVATE ""KEY-----"
+    run_cmd redaction printf "%s\n" \
+        "$github_token" "$fine_token" "$slack_token" "$authorization" \
+        "$private_begin" private-material "$private_end"
+    DRY_RUN=1
+    dry_run_msg curl -H "$authorization" https://example.invalid
+' _ "$redaction_log" 2>&1) \
+    && grep -Fq '[REDACTED_GITHUB_TOKEN]' "$redaction_log" \
+    && grep -Fq '[REDACTED_SLACK_TOKEN]' "$redaction_log" \
+    && grep -Fq '[REDACTED PRIVATE KEY]' "$redaction_log" \
+    && grep -Fq '[REDACTED_GITHUB_TOKEN]' <<<"$redaction_output" \
+    && ! grep -Eq 'TESTTOKEN|private-material|123456-secret' "$redaction_log" \
+    && ! grep -Eq 'TESTTOKEN|123456-secret' <<<"$redaction_output"; then
+    ok 'logs e dry-run removem tokens, bearer e blocos de chave privada'
+else
+    error 'redaction de logs ou output falhou'
+    ((failures += 1))
+fi
+
+state_home="$ssh_test_home/state-home"
+if HOME="$ssh_test_home" XDG_STATE_HOME="$state_home" bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/env
+    state
+    [[ $LEANIN_STATE_DIR == "$XDG_STATE_HOME/leanin" ]]
+    [[ $(stat -c %a "$LEANIN_STATE_DIR") == 700 ]]
+    [[ $(stat -c %a "$LEANIN_LOG_DIR") == 700 ]]
+    [[ $(stat -c %a "$LOG_FILE") == 600 ]]
+'; then
+    ok 'logs do leanin usam caminho e permissões restritas'
+else
+    error 'permissões de logs não são 700/600'
+    ((failures += 1))
+fi
+
+if grep -REn 'cat[[:space:]]+.*(SSH_PRIVATE_KEY|id_ed25519([^.]|$))' lib install.sh >/dev/null 2>&1; then
+    error 'código tenta imprimir conteúdo de chave SSH privada'
+    ((failures += 1))
+else
+    ok 'nenhuma chave SSH privada é lida com cat'
+fi
+
+ssh_normalize() {
+    HOME=$ssh_test_home bash -c \
+        'source lib/log; source lib/ssh; _normalize_ssh_key_path "$1"' _ "$1"
+}
+if [[ $(ssh_normalize test) == "$ssh_test_home/.ssh/test" \
+    && $(ssh_normalize keys/personal) == "$ssh_test_home/.ssh/keys/personal" ]] \
+    && ! ssh_normalize ../outside >/dev/null 2>&1 \
+    && ! ssh_normalize /tmp/outside >/dev/null 2>&1; then
+    ok 'caminhos SSH ficam restritos a ~/.ssh'
+else
+    error 'normalização de caminho SSH insegura'
+    ((failures += 1))
+fi
+
+if grep -Fq '_github_default_title()' lib/gh \
+    && grep -Fq "printf 'leanin-%s-%s'" lib/gh; then
+    ok 'título padrão da chave GitHub identifica a máquina'
+else
+    error 'título padrão da chave GitHub não identifica a máquina'
+    ((failures += 1))
+fi
+if grep -Fq "yesno 'remover chaves SSH antigas do GitHub que não são a chave atual?' n" lib/gh \
+    && grep -Fq 'GITHUB_OLD_KEY_IDS' lib/gh \
+    && ! grep -Fq 'Deletar TODAS as SSH keys antigas do GitHub?' lib/gh \
+    && ! grep -Fq 'Digite DELETE' lib/gh; then
+    ok 'limpeza GitHub usa confirmação única com default não'
+else
+    error 'confirmação GitHub não usa o fluxo s/N esperado'
+    ((failures += 1))
+fi
+# Os tokens abaixo verificam o código-fonte literal.
+# shellcheck disable=SC2016
+if grep -Fq 'ask_reconfigure()' lib/ask \
+    && grep -Fq "'identidade Git já configurada'" lib/git \
+    && grep -Fq "'chave SSH local já existe'" lib/ssh \
+    && grep -Fq '_backup_ssh_key' lib/ssh \
+    && grep -Fq 'mv -- "$private_key" "$backup_private"' lib/ssh \
+    && grep -Fq 'UserKnownHostsFile=/dev/null' lib/ssh \
+    && grep -Fq "'Codex já existe em ~/.codex/bin/codex'" lib/codex \
+    && grep -Fq 'ask_additive' lib/codex \
+    && grep -Fq 'flatpak remote-modify --url' lib/flatpak \
+    && grep -Fq 'flathub já existe com configuração diferente' lib/flatpak \
+    && grep -Fq 'serviço $service está inativo' lib/service; then
+    ok 'reconfigurações existentes exigem confirmação e SSH cria backup'
+else
+    error 'confirmações ou backup de reconfiguração estão ausentes'
+    ((failures += 1))
+fi
+if rg -n 'ask_(reconfigure|additive)' lib/pkg lib/aur >/dev/null 2>&1; then
+    error 'instalação de pacotes passou a pedir confirmação individual'
+    ((failures += 1))
+else
+    ok 'pacotes já instalados continuam sendo apenas pulados'
+fi
+if grep -Eq '(rm|unlink)[[:space:]].*(\.ssh|SSH_PRIVATE_KEY|SSH_PUBLIC_KEY)' lib/ssh lib/gh; then
+    error 'fluxo GitHub tenta deletar arquivos SSH locais'
+    ((failures += 1))
+else
+    ok 'fluxo GitHub não deleta arquivos SSH locais'
+fi
+if grep -REn '(^|[[:space:]])(yay|paru|pacman)[[:space:]]+-R' install.sh lib scripts >/dev/null 2>&1; then
+    error 'comando de remoção automática de pacotes encontrado'
+    ((failures += 1))
+else
+    ok 'nenhuma remoção automática de pacotes encontrada'
+fi
+if grep -Fq 'github_manual_ssh_key()' lib/gh \
+    && grep -Fq 'GITHUB_KEYS_URL' lib/gh; then
+    ok 'fallback manual de SSH permanece disponível'
+else
+    error 'fallback manual de SSH ausente'
+    ((failures += 1))
+fi
