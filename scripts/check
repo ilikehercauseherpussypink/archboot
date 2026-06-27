@@ -42,6 +42,7 @@ required=(
     scripts/check scripts/github
     cloudflare/worker.js cloudflare/wrangler.toml.example cloudflare/README.md
     lib/log lib/ask lib/env lib/doctor lib/run lib/pkg lib/flatpak lib/aur lib/apps lib/service
+    lib/control
     lib/git lib/ssh lib/gh lib/codex
     apps/pacman/base apps/pacman/dev apps/pacman/browsers apps/pacman/audio
     apps/pacman/privacy apps/pacman/system
@@ -209,7 +210,7 @@ fi
 # shellcheck disable=SC2016
 if grep -Fq 'LEANIN_REPO=https://github.com/ilikehercauseherpussypink/leanin' install.sh \
     && grep -Fq 'LEANIN_BRANCH=main' install.sh \
-    && grep -Fq 'CI_MODE=${LEANIN_CI:-${ARCHBOOT_CI:-0}}' install.sh; then
+    && grep -Fq 'CI_MODE=${LEANIN_CI:-${ARCHBOOT_CI:-0}}' lib/control; then
     ok 'bootstrap remoto aponta para o repositório publicado'
 else
     error 'default LEANIN_REPO não aponta para ilikehercauseherpussypink/leanin'
@@ -218,7 +219,7 @@ fi
 # shellcheck disable=SC2016
 if ! rg -n 'ARCHBOOT_(REPO|BRANCH|BOOTSTRAPPED|ROOT|STATE_DIR|LOG_DIR|VERSION)' \
     install.sh lib docs README.md >/dev/null 2>&1 \
-    && grep -Fq 'CI_MODE=${LEANIN_CI:-${ARCHBOOT_CI:-0}}' install.sh; then
+    && grep -Fq 'CI_MODE=${LEANIN_CI:-${ARCHBOOT_CI:-0}}' lib/control; then
     ok 'ARCHBOOT_CI é o único alias de compatibilidade mantido'
 else
     error 'alias ARCHBOOT antigo permanece fora do modo CI'
@@ -322,7 +323,7 @@ bootstrap_tokens=(
     '((${#FAILURES[@]} == 0))'
 )
 for token in "${bootstrap_tokens[@]}"; do
-    if ! grep -Fq "$token" install.sh; then
+    if ! grep -Fq "$token" install.sh lib/control; then
         error "bootstrap sem proteção esperada: $token"
         ((failures += 1))
     fi
@@ -1004,8 +1005,8 @@ else
     controls_fail=1
 fi
 
-if ! grep -Fq 'next_step' install.sh \
-    || grep -Fq "next_step 'finalizando integrações'" install.sh; then
+if ! grep -Fq 'next_step' lib/control \
+    || grep -Fq "next_step 'finalizando integrações'" lib/control; then
     error 'fluxo ainda contém etapa final vazia ou sem contador centralizado'
     controls_fail=1
 else
@@ -1075,11 +1076,11 @@ fi
 
 # A expressão é intencionalmente literal para validar o código-fonte.
 # shellcheck disable=SC2016
-if grep -Fq 'elif (( DRY_RUN )); then' install.sh \
-    && grep -Fq "ok 'dry-run concluído'" install.sh \
-    && grep -Fq 'error "concluído com $failure_count falha(s)"' install.sh \
-    && grep -Fq 'summary_counts pacman' install.sh \
-    && grep -Fq 'summary_counts serviços' install.sh; then
+if grep -Fq 'elif (( DRY_RUN )); then' lib/control \
+    && grep -Fq "ok 'dry-run concluído'" lib/control \
+    && grep -Fq 'error "concluído com $failure_count falha(s)"' lib/control \
+    && grep -Fq 'summary_counts pacman' lib/control \
+    && grep -Fq 'summary_counts serviços' lib/control; then
     ok 'resumo distingue sucesso, falhas e contagens por fonte'
 else
     error 'resumo final não preserva diagnóstico e contagens esperados'
@@ -1686,8 +1687,8 @@ if github_api_backend_test >/dev/null 2>&1 \
     && grep -Fq '_github_key_material' lib/gh \
     && ! grep -Fq 'ssh_signing_keys' lib/gh \
     && ! grep -Eq '^[[:space:]]*gh[[:space:]]+ssh-key[[:space:]]+list' lib/gh \
-    && grep -Fq 'if github_ssh_registration_ready; then' install.sh \
-    && grep -Fq 'test_github_ssh || true' install.sh; then
+    && grep -Fq 'if github_ssh_registration_ready; then' lib/control \
+    && grep -Fq 'test_github_ssh || true' lib/control; then
     ok 'GitHub usa API user/keys, confirma a chave e isola chaves de assinatura'
 else
     error 'backend GitHub user/keys não está completo'
