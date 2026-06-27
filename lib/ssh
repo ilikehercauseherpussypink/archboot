@@ -1,0 +1,343 @@
+#!/usr/bin/env bash
+
+SSH_PRIVATE_KEY=''
+SSH_PUBLIC_KEY=''
+SSH_CLIPBOARD='não'
+SSH_GITHUB_RESULT='não testado'
+SSH_KEY_WAS_EXISTING=0
+SSH_KEY_CREATED=0
+SSH_BACKUP_PRIVATE=''
+SSH_BACKUP_PUBLIC=''
+# Consumida pelo orquestrador após source deste módulo.
+# shellcheck disable=SC2034
+GITHUB_KEYS_URL='https://github.com/settings/keys'
+
+_normalize_ssh_key_path() {
+    local input=$1 ssh_dir candidate normalized
+    ssh_dir=$(realpath -m -- "$HOME/.ssh") || return 1
+
+    # Os padrões representam texto digitado, não expansão do shell atual.
+    # shellcheck disable=SC2016,SC2088
+    case $input in
+        '~/'*) candidate="$HOME/${input:2}" ;;
+        '\$HOME/'*) candidate="$HOME/${input:6}" ;;
+        /*) candidate=$input ;;
+        *) candidate="$ssh_dir/$input" ;;
+    esac
+
+    normalized=$(realpath -m -- "$candidate") || return 1
+    if [[ $normalized != "$ssh_dir/"* ]]; then
+        warn 'o caminho da chave deve ficar dentro de ~/.ssh'
+        return 1
+    fi
+    printf '%s' "$normalized"
+}
+
+_set_ssh_permissions() {
+    local private_key=$1 public_key=$2 key_dir
+    key_dir=$(dirname -- "$private_key")
+    if (( DRY_RUN )); then
+        dry_run_msg mkdir -p "$key_dir"
+        dry_run_msg chmod 700 "$HOME/.ssh"
+        [[ $key_dir == "$HOME/.ssh" ]] || dry_run_msg chmod 700 "$key_dir"
+        dry_run_msg chmod 600 "$private_key"
+        dry_run_msg chmod 644 "$public_key"
+        return 0
+    fi
+    mkdir -p "$key_dir"
+    chmod 700 "$HOME/.ssh"
+    [[ $key_dir == "$HOME/.ssh" ]] || chmod 700 "$key_dir"
+    chmod 600 "$private_key"
+    chmod 644 "$public_key"
+}
+
+_backup_ssh_key() {
+    local private_key=$1 public_key=$2 timestamp backup_private backup_public
+    timestamp=$(date '+%Y%m%d-%H%M%S')-$$
+    backup_private="$private_key.bak.$timestamp"
+    backup_public="$public_key.bak.$timestamp"
+
+    if [[ -e $private_key ]] && ! mv -- "$private_key" "$backup_private"; then
+        warn 'não foi possível criar backup da chave SSH privada'
+        return 1
+    fi
+    if [[ -e $public_key ]] && ! mv -- "$public_key" "$backup_public"; then
+        if [[ -e $backup_private && ! -e $private_key ]]; then
+            mv -- "$backup_private" "$private_key" || true
+        fi
+        warn 'não foi possível criar backup da chave SSH pública'
+        return 1
+    fi
+    SSH_BACKUP_PRIVATE=$backup_private
+    SSH_BACKUP_PUBLIC=$backup_public
+    info "backup SSH criado: $backup_private"
+    [[ -e $backup_public ]] && info "backup SSH criado: $backup_public"
+    return 0
+}
+
+_restore_ssh_backup() {
+    local private_key=$1 public_key=$2 restored=0
+    if [[ -n $SSH_BACKUP_PRIVATE && -e $SSH_BACKUP_PRIVATE ]]; then
+        mv -- "$SSH_BACKUP_PRIVATE" "$private_key" && restored=1
+    fi
+    if [[ -n $SSH_BACKUP_PUBLIC && -e $SSH_BACKUP_PUBLIC ]]; then
+        mv -- "$SSH_BACKUP_PUBLIC" "$public_key" && restored=1
+    fi
+    (( restored )) && warn 'chave SSH anterior restaurada após falha na geração'
+    return 0
+}
+
+_ssh_permissions_secure() {
+    local private_key=$1 public_key=$2 ssh_mode='' private_mode='' public_mode=''
+    ssh_mode=$(stat -c '%a' "$HOME/.ssh" 2>/dev/null || true)
+    private_mode=$(stat -c '%a' "$private_key" 2>/dev/null || true)
+    public_mode=$(stat -c '%a' "$public_key" 2>/dev/null || true)
+    [[ $ssh_mode == 700 && $private_mode == 600 && $public_mode == 644 ]]
+}
+
+_ssh_tty_path() {
+    printf '%s' /dev/tty
+}
+
+_ssh_tty_available() {
+    local tty='' fd
+    tty=$(_ssh_tty_path)
+    [[ -n $tty && -e $tty ]] || return 1
+    if ! { exec {fd}<>"$tty"; } 2>/dev/null; then
+        return 1
+    fi
+    exec {fd}>&-
+}
+
+_generate_ssh_key() {
+    local private_key=$1 email=$2 tty='' fd status=0
+    tty=$(_ssh_tty_path)
+    if [[ -z $tty || ! -e $tty ]] || ! { exec {fd}<>"$tty"; } 2>/dev/null; then
+        error 'não há terminal disponível para gerar chave SSH interativa'
+        info 'baixe o script e execute localmente:'
+        info 'curl -fsSL https://shelies.org -o install.sh'
+        info 'bash install.sh'
+        return 1
+    fi
+
+    # The open descriptor is the interactive terminal, never piped stdin.
+    SSH_ASKPASS='' SSH_ASKPASS_REQUIRE=never \
+        ssh-keygen -q -t ed25519 -C "$email" -f "$private_key" \
+        <&"$fd" >&"$fd" 2>&"$fd"
+    status=$?
+    exec {fd}>&-
+    return "$status"
+}
+
+_start_ssh_agent() {
+    local agent_output sock pid
+    [[ -n ${SSH_AUTH_SOCK:-} ]] && return 0
+    command_exists ssh-agent || return 1
+    agent_output=$(ssh-agent -s 2>/dev/null) || return 1
+    sock=$(printf '%s\n' "$agent_output" | sed -n 's/^SSH_AUTH_SOCK=\([^;]*\).*/\1/p')
+    pid=$(printf '%s\n' "$agent_output" | sed -n 's/^SSH_AGENT_PID=\([^;]*\).*/\1/p')
+    [[ -n $sock && -n $pid ]] || return 1
+    export SSH_AUTH_SOCK=$sock SSH_AGENT_PID=$pid
+}
+
+_add_ssh_key_to_agent() {
+    local private_key=$1 tty='' fd status=0
+
+    if (( ${ASSUME_YES:-0} || ${CI_MODE:-0} == 1 )); then
+        skip 'ssh-agent não alterado por modo seguro'
+        return 0
+    fi
+    tty=$(_ssh_tty_path)
+    if [[ -z $tty || ! -e $tty ]] || ! { exec {fd}<>"$tty"; } 2>/dev/null; then
+        warn 'não há terminal disponível para adicionar a chave ao ssh-agent'
+        info "adicione depois: ssh-add $private_key"
+        return 1
+    fi
+
+    info 'ssh-add pode solicitar a passphrase da chave neste terminal'
+    _log_command ssh-add "$private_key"
+    set +e
+    # The open descriptor keeps passphrase prompts out of piped stdin.
+    SSH_ASKPASS='' SSH_ASKPASS_REQUIRE=never ssh-add "$private_key" \
+        <&"$fd" >&"$fd" 2>&"$fd"
+    status=$?
+    exec {fd}>&-
+    set -e
+    if (( status == 0 )); then
+        ok 'ssh-agent'
+        return 0
+    fi
+    warn 'não foi possível adicionar a chave ao ssh-agent'
+    return "$status"
+}
+
+configure_ssh() {
+    local default_key="$HOME/.ssh/id_ed25519" email normalized
+    local private_exists=0 public_exists=0 regenerate=0
+
+    command_exists ssh-keygen || {
+        warn 'ssh-keygen indisponível; configuração SSH pulada'
+        FAILURES+=('ssh:indisponivel')
+        return 1
+    }
+
+    [[ -e $default_key ]] && private_exists=1
+    [[ -e $default_key.pub ]] && public_exists=1
+    SSH_PRIVATE_KEY=$default_key
+    SSH_PUBLIC_KEY="$default_key.pub"
+
+    if (( private_exists && public_exists )); then
+        # Consumida pelo módulo GitHub após source deste módulo.
+        # shellcheck disable=SC2034
+        SSH_KEY_WAS_EXISTING=1
+        info "chave SSH local encontrada: $SSH_PUBLIC_KEY"
+        if ! ask_reconfigure 'chave SSH local já existe' \
+            'chave SSH local já existe. deseja gerar uma nova?'; then
+            skip 'chave SSH local mantida'
+        else
+            regenerate=1
+        fi
+    elif (( private_exists || public_exists )); then
+        warn 'chave SSH local está incompleta'
+        if ! ask_reconfigure 'chave SSH local está incompleta' \
+            'chave SSH local está incompleta. deseja reparar/refazer?'; then
+            warn 'chave SSH local incompleta mantida; SSH será pulado'
+            return 1
+        fi
+        regenerate=1
+    else
+        if ! yesno 'Criar uma chave SSH ed25519 para GitHub?' n; then
+            skip 'criação de chave SSH recusada'
+            return 1
+        fi
+        SSH_KEY_CREATED=1
+    fi
+
+    if ! normalized=$(_normalize_ssh_key_path "$SSH_PRIVATE_KEY"); then
+        warn 'caminho de chave inválido; configuração SSH pulada'
+        return 1
+    fi
+    SSH_PRIVATE_KEY=$normalized
+    SSH_PUBLIC_KEY="$SSH_PRIVATE_KEY.pub"
+    (( VERBOSE )) && info "caminho SSH final: $SSH_PRIVATE_KEY"
+    if (( SSH_KEY_CREATED && ! DRY_RUN )) && ! _ssh_tty_available; then
+        error 'não há terminal disponível para gerar chave SSH interativa'
+        info 'baixe o script e execute localmente:'
+        info 'curl -fsSL https://shelies.org -o install.sh'
+        info 'bash install.sh'
+        return 1
+    fi
+    if (( regenerate )); then
+        _backup_ssh_key "$SSH_PRIVATE_KEY" "$SSH_PUBLIC_KEY" || return 1
+        SSH_KEY_CREATED=1
+    fi
+
+    if (( SSH_KEY_CREATED )); then
+        email=${GIT_EMAIL:-$(git config --global --get user.email 2>/dev/null || true)}
+        email=${email:-$USER@$(hostname)}
+        if (( DRY_RUN )); then
+            printf '> [dry-run] criaria chave SSH em %s\n' "$SSH_PRIVATE_KEY"
+            dry_run_msg ssh-keygen -t ed25519 -C "$email" -f "$SSH_PRIVATE_KEY"
+            _set_ssh_permissions "$SSH_PRIVATE_KEY" "$SSH_PUBLIC_KEY"
+        else
+            mkdir -p "$HOME/.ssh"
+            chmod 700 "$HOME/.ssh"
+            info 'ssh-keygen solicitará uma passphrase; ela não será registrada'
+            if _generate_ssh_key "$SSH_PRIVATE_KEY" "$email"; then
+                _set_ssh_permissions "$SSH_PRIVATE_KEY" "$SSH_PUBLIC_KEY"
+                ok "chave SSH local pronta: $SSH_PUBLIC_KEY"
+            else
+                _restore_ssh_backup "$SSH_PRIVATE_KEY" "$SSH_PUBLIC_KEY"
+                error 'falha ao gerar chave SSH'
+                return 1
+            fi
+        fi
+    elif [[ ! -f $SSH_PRIVATE_KEY || ! -f $SSH_PUBLIC_KEY ]]; then
+        warn "chave pública ausente: $SSH_PUBLIC_KEY"
+        return 1
+    fi
+
+    if (( ! SSH_KEY_CREATED )) && ! _ssh_permissions_secure "$SSH_PRIVATE_KEY" "$SSH_PUBLIC_KEY"; then
+        info 'ajustando permissões da chave SSH existente'
+        if ! _set_ssh_permissions "$SSH_PRIVATE_KEY" "$SSH_PUBLIC_KEY"; then
+            warn 'não foi possível ajustar permissões da chave SSH'
+            return 1
+        fi
+    fi
+
+    if (( ! DRY_RUN )); then
+        if _start_ssh_agent; then
+            _add_ssh_key_to_agent "$SSH_PRIVATE_KEY" || true
+        else
+            warn 'ssh-agent indisponível'
+        fi
+    fi
+    export SSH_PRIVATE_KEY SSH_PUBLIC_KEY SSH_CLIPBOARD
+}
+
+print_pubkey() {
+    [[ -n $SSH_PUBLIC_KEY ]] || return 1
+    if (( DRY_RUN )); then
+        info "chave pública planejada: $SSH_PUBLIC_KEY"
+        return 0
+    fi
+    [[ -r $SSH_PUBLIC_KEY ]] || return 1
+    printf 'PUBLIC SSH KEY PATH: %s\n' "$SSH_PUBLIC_KEY" >>"$LOG_FILE"
+    printf '\n> Chave pública SSH\n'
+    cat "$SSH_PUBLIC_KEY"
+    printf '\n'
+    if command_exists wl-copy; then
+        if wl-copy <"$SSH_PUBLIC_KEY"; then
+            SSH_CLIPBOARD='sim (wl-copy)'
+        fi
+    elif command_exists xclip; then
+        if xclip -selection clipboard <"$SSH_PUBLIC_KEY"; then
+            SSH_CLIPBOARD='sim (xclip)'
+        fi
+    elif command_exists xsel; then
+        if xsel --clipboard --input <"$SSH_PUBLIC_KEY"; then
+            SSH_CLIPBOARD='sim (xsel)'
+        fi
+    elif command_exists pbcopy; then
+        if pbcopy <"$SSH_PUBLIC_KEY"; then
+            SSH_CLIPBOARD='sim (pbcopy)'
+        fi
+    fi
+    if [[ $SSH_CLIPBOARD == não ]]; then
+        info 'clipboard indisponível; copie a chave manualmente'
+    else
+        ok 'chave pública copiada para o clipboard'
+    fi
+    export SSH_CLIPBOARD
+}
+
+test_github_ssh() {
+    local output status=0
+    if (( DRY_RUN )); then
+        dry_run_msg ssh -o StrictHostKeyChecking=accept-new \
+            -o UserKnownHostsFile=/dev/null -T git@github.com
+        SSH_GITHUB_RESULT='dry-run'
+        return 0
+    fi
+    set +e
+    output=$(ssh -o StrictHostKeyChecking=accept-new \
+        -o UserKnownHostsFile=/dev/null -T git@github.com 2>&1)
+    status=$?
+    set -e
+    printf '%s\n' "$output" | redact_sensitive >>"$LOG_FILE"
+    (( VERBOSE )) && printf '%s\n' "$output" | redact_sensitive
+    if [[ $output == *'successfully authenticated'* \
+        || $output == *"You've successfully authenticated"* \
+        || $output == *'does not provide shell access'* ]]; then
+        SSH_GITHUB_RESULT='autenticado'
+        ok 'SSH GitHub autenticado'
+        return 0
+    fi
+    # Consumida pelo resumo do orquestrador.
+    # shellcheck disable=SC2034
+    SSH_GITHUB_RESULT="falhou (código $status)"
+    warn 'teste SSH com GitHub não confirmou autenticação'
+    info 'teste manual: ssh -T git@github.com'
+    info "log: $LOG_FILE"
+    return 1
+}
