@@ -1,0 +1,55 @@
+step 4 11 'validando repositório'
+
+# Os padrões abaixo verificam texto-fonte literal, sem expansão nesta execução.
+# shellcheck disable=SC2016
+if grep -Fq 'LEANIN_REPO=https://github.com/uswl/leanin' install.sh \
+    && grep -Fq 'LEANIN_BRANCH=main' install.sh \
+    && grep -Fq 'CI_MODE=${LEANIN_CI:-${ARCHBOOT_CI:-0}}' lib/options; then
+    ok 'bootstrap remoto aponta para o repositório publicado'
+else
+    error 'default LEANIN_REPO não aponta para uswl/leanin'
+    ((failures += 1))
+fi
+# shellcheck disable=SC2016
+if ! rg -n 'ARCHBOOT_(REPO|BRANCH|BOOTSTRAPPED|ROOT|STATE_DIR|LOG_DIR|VERSION)' \
+    install.sh lib docs README.md >/dev/null 2>&1 \
+    && grep -Fq 'CI_MODE=${LEANIN_CI:-${ARCHBOOT_CI:-0}}' lib/options; then
+    ok 'ARCHBOOT_CI é o único alias de compatibilidade mantido'
+else
+    error 'alias ARCHBOOT antigo permanece fora do modo CI'
+    ((failures += 1))
+fi
+tracked_sensitive=''
+if [[ -d .git ]]; then
+    tracked_sensitive=$(git ls-files | grep -E \
+        '(^|/)(\.env($|\.)|wrangler\.toml$|id_ed25519(\.pub)?$)|\.(key|pem|log)$|(^|/)(node_modules|\.cache|tmp)/' \
+        || true)
+fi
+if [[ -n $tracked_sensitive ]]; then
+    error 'arquivos sensíveis ou gerados estão versionados:'
+    printf '%s\n' "$tracked_sensitive" >&2
+    ((failures += 1))
+else
+    ok 'nenhum artefato sensível ou gerado está versionado'
+fi
+secret_regex='OPENAI_''API_KEY=|gh''p_[A-Za-z0-9_]{8,}|github_''pat_[A-Za-z0-9_]{8,}|xox''b-[A-Za-z0-9-]{8,}|Authorization:[[:space:]]+Bearer[[:space:]]+[A-Za-z0-9]|s''k-[A-Za-z0-9]{8,}|pass''word=|pass''wd=|BEGIN OPENSSH PRIVATE ''KEY|BEGIN RSA PRIVATE ''KEY'
+secret_found=0
+while IFS= read -r -d '' file; do
+    if grep -EIn "$secret_regex" "$file" >/dev/null 2>&1; then
+        error "possível segredo em $file"
+        secret_found=1
+    fi
+done < <(find . -type f \
+    -not -path './.git/*' \
+    -not -path './node_modules/*' \
+    -not -path './.cache/*' \
+    -not -name '*.log' -print0)
+while IFS= read -r -d '' file; do
+    error "arquivo de chave SSH encontrado: $file"
+    secret_found=1
+done < <(find . -type f \( -name id_ed25519 -o -name id_ed25519.pub \) -print0)
+if (( secret_found )); then
+    ((failures += 1))
+else
+    ok 'nenhum segredo óbvio encontrado'
+fi

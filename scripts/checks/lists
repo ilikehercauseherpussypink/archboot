@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-step 3 10 'validando listas de apps'
+step 3 11 'validando listas de apps'
 flatpak_pattern='^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+){2,}$'
 package_pattern='^[A-Za-z0-9@._+-]+$'
 declare -A seen_apps=()

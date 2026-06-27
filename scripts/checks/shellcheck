@@ -1,0 +1,11 @@
+step 11 11 'executando shellcheck'
+if command -v shellcheck >/dev/null 2>&1; then
+    if shellcheck -x "${bash_files[@]}"; then
+        ok 'shellcheck'
+    else
+        error 'shellcheck encontrou problemas'
+        ((failures += 1))
+    fi
+else
+    skip 'shellcheck não instalado'
+fi

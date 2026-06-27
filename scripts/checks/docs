@@ -1,0 +1,191 @@
+step 8 11 'validando documentação'
+docs_fail=0
+readme_tokens=(
+    'leanin'
+    'https://shelies.org'
+    'curl -fsSL https://shelies.org | bash'
+    '--doctor'
+    '--dry-run'
+    '--plan'
+    'org.vinegarhq.Sober'
+    'docs/TROUBLESHOOTING.md'
+    'docs/APPS.md'
+    'docs/SAFETY.md'
+    'docs/ARCHITECTURE.md'
+    'CHANGELOG.md'
+    'cloudflare/README.md'
+    'A personal Arch Linux bootstrap built around repeatability'
+    '## why'
+    '## highlights'
+    '## architecture'
+    'MIT'
+)
+for token in "${readme_tokens[@]}"; do
+    if ! grep -Fq -- "$token" README.md; then
+        error "README.md não contém: $token"
+        docs_fail=1
+    fi
+done
+cloudflare_readme_tokens=(
+    'https://shelies.org'
+    'https://github.com/uswl/leanin'
+)
+for token in "${cloudflare_readme_tokens[@]}"; do
+    if ! grep -Fq "$token" cloudflare/README.md; then
+        error "cloudflare/README.md não contém: $token"
+        docs_fail=1
+    fi
+done
+troubleshooting_tokens=(
+    'bash -s -- --doctor'
+    'https://shelies.org/health'
+    'Pacman lock'
+    'gh auth status'
+    'ssh -T git@github.com'
+    'tail -n 120 ~/.local/state/leanin/logs/FILE.log'
+    'safe default'
+    '/dev/tty'
+    'gh api user/keys'
+    'admin:public_key'
+    'gh auth login -h github.com -p ssh -s admin:public_key --web'
+    'gh auth refresh -h github.com -s admin:public_key'
+    'SSH signing-key API'
+)
+for token in "${troubleshooting_tokens[@]}"; do
+    if ! grep -Fiq "$token" docs/TROUBLESHOOTING.md; then
+        error "docs/TROUBLESHOOTING.md não contém: $token"
+        docs_fail=1
+    fi
+done
+if [[ $(head -n 1 README.md) != '<p align="center">' ]]; then
+    error 'README.md não começa com o banner do projeto'
+    docs_fail=1
+fi
+if ! grep -Fq 'docs/assets/leanin.svg' README.md; then
+    error 'README.md não referencia o banner SVG local'
+    docs_fail=1
+fi
+if grep -Fq 'archboot' README.md; then
+    error 'README.md contém branding antigo'
+    docs_fail=1
+fi
+if rg -n 'archboot|github\.com/ilikehercauseherpussypink/(archboot|leanin)|/home/pc/archboot|docs/assets/archboot\.svg' \
+    README.md docs cloudflare CHANGELOG.md >/dev/null 2>&1; then
+    error 'documentação contém referência antiga ao repositório, caminho ou asset'
+    docs_fail=1
+fi
+if ! grep -Fq 'curl -fsSL https://shelies.org | bash' README.md; then
+    error 'README.md não prioriza o domínio curto no quick start'
+    docs_fail=1
+fi
+if grep -Fq 'raw.githubusercontent.com' README.md; then
+    error 'README.md prioriza raw.githubusercontent.com como instalação'
+    docs_fail=1
+fi
+if grep -Eq 'stable/dev|dev\.shelies\.org|STABLE_REF|DEV_REF' README.md; then
+    error 'README.md contém referência ao fluxo stable/dev removido'
+    docs_fail=1
+fi
+legacy_readme_headings=(
+    '## Quick start'
+    '## Safer audit-first install'
+    '## Installer controls'
+    '## Apps'
+    '## Services'
+    '## Git, SSH and GitHub'
+    '## Codex'
+    '## Mullvad'
+    '## Uninstall notes'
+    '## Security notes'
+    '## What it handles'
+    '## Project layout'
+    '## Quick commands'
+)
+for heading in "${legacy_readme_headings[@]}"; do
+    if grep -Fq "$heading" README.md; then
+        error "README.md contém seção antiga duplicada: $heading"
+        docs_fail=1
+    fi
+done
+readme_forbidden=(
+    'Bootstrap modular para Arch Linux'
+    'Uso rápido'
+    'Instalação'
+    'Aplicativos'
+    'Serviços'
+    'Configuração'
+    'Diagnóstico'
+    'Documentação'
+    '〖'
+    '〗'
+    '•'
+    '·'
+    'img.shields.io'
+    'badge.svg'
+)
+for token in "${readme_forbidden[@]}"; do
+    if grep -Fq -- "$token" README.md; then
+        error "README.md contém conteúdo visual ou português proibido: $token"
+        docs_fail=1
+    fi
+done
+readme_lines=$(wc -l <README.md)
+if (( readme_lines > 230 )); then
+    error "README.md excede o limite de 230 linhas: $readme_lines"
+    docs_fail=1
+fi
+if [[ -e docs/assets/archboot.svg ]]; then
+    error 'banner SVG antigo ainda existe'
+    docs_fail=1
+elif [[ ! -s docs/assets/leanin.svg ]] \
+    || ! grep -Fq '<svg' docs/assets/leanin.svg; then
+    error 'banner SVG ausente ou vazio'
+    docs_fail=1
+elif grep -Eq '<(image|script)\b|xlink:href|href="https?://|url\(' docs/assets/leanin.svg; then
+    error 'banner SVG referencia recurso remoto ou executável'
+    docs_fail=1
+fi
+if ! grep -Fq '# Troubleshooting' docs/TROUBLESHOOTING.md \
+    || ! grep -Fq '# Cloudflare Worker' cloudflare/README.md; then
+    error 'docs de troubleshooting ou Cloudflare não estão em inglês'
+    docs_fail=1
+fi
+portuguese_prose=(
+    'Comece pelo'
+    'Use o plano'
+    'sem alterar'
+    'O Worker'
+    'Instale '
+    'Crie a'
+    'Edite '
+    'Depois publique'
+    'Nenhuma secret'
+    'Faça o deploy'
+    'Configure '
+    'Não execute'
+    'Confira '
+    'Cada instalação'
+)
+for markdown_file in docs/TROUBLESHOOTING.md cloudflare/README.md docs/APPS.md docs/SAFETY.md docs/ARCHITECTURE.md CHANGELOG.md; do
+    for token in "${portuguese_prose[@]}"; do
+        if grep -Fq -- "$token" "$markdown_file"; then
+            error "$markdown_file contém prosa em português: $token"
+            docs_fail=1
+        fi
+    done
+done
+for markdown_file in README.md cloudflare/README.md docs/TROUBLESHOOTING.md docs/APPS.md docs/SAFETY.md docs/ARCHITECTURE.md; do
+    if ! awk '/^```/ { open = !open } END { exit open ? 1 : 0 }' "$markdown_file"; then
+        error "$markdown_file contém bloco de código aberto"
+        docs_fail=1
+    fi
+done
+if (( docs_fail )); then
+    ((failures += 1))
+else
+    ok 'documentação alinhada com o domínio curto e a estrutura atual'
+fi
+if ! grep -Fq '## Unreleased' CHANGELOG.md; then
+    error 'CHANGELOG.md não contém seção Unreleased'
+    ((failures += 1))
+fi

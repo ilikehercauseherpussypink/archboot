@@ -1,0 +1,26 @@
+step 9 11 'validando GitHub Actions'
+workflow=.github/workflows/check.yml
+workflow_fail=0
+workflow_tokens=(
+    'name: check'
+    'push:'
+    'pull_request:'
+    'runs-on: ubuntu-latest'
+    'actions/checkout@v6'
+    'actions/setup-node@v6'
+    'bash scripts/check'
+    'LEANIN_CI=1 bash install.sh --doctor'
+    'LEANIN_CI=1 bash install.sh --dry-run --no-packages'
+    'node --check cloudflare/worker.js'
+)
+for token in "${workflow_tokens[@]}"; do
+    if ! grep -Fq "$token" "$workflow"; then
+        error "workflow não contém: $token"
+        workflow_fail=1
+    fi
+done
+if (( workflow_fail )); then
+    ((failures += 1))
+else
+    ok 'workflow de checks válido'
+fi

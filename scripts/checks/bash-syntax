@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-step 2 10 'validando sintaxe Bash'
+step 2 11 'validando sintaxe Bash'
 mapfile -t bash_files < <(
     printf '%s\n' install.sh scripts/check scripts/github
     find lib -maxdepth 1 -type f | sort

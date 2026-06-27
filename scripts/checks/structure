@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-step 1 10 'validando estrutura'
+step 1 11 'validando estrutura'
 required=(
     install.sh README.md CHANGELOG.md LICENSE .gitignore
     docs/TROUBLESHOOTING.md docs/APPS.md docs/SAFETY.md docs/ARCHITECTURE.md
@@ -8,6 +8,9 @@ required=(
     .github/workflows/check.yml
     scripts/check scripts/github
     scripts/checks/common scripts/checks/structure scripts/checks/bash-syntax scripts/checks/lists
+    scripts/checks/repository scripts/checks/safety scripts/checks/bootstrap
+    scripts/checks/installer-controls scripts/checks/docs scripts/checks/workflow
+    scripts/checks/worker scripts/checks/shellcheck
     cloudflare/worker.js cloudflare/wrangler.toml.example cloudflare/README.md
     lib/log lib/ask lib/env lib/doctor lib/run lib/pkg lib/flatpak lib/aur lib/apps lib/service
     lib/control lib/options

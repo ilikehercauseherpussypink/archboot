@@ -1,0 +1,1162 @@
+step 7 11 'validando controles do instalador'
+controls_fail=0
+if version_output=$(bash install.sh --version 2>&1) \
+    && piped_version_output=$(set -o pipefail; sed -n p install.sh | bash -s -- --version) \
+    && [[ $version_output == 'leanin 0.1.1' ]] \
+    && [[ $piped_version_output == 'leanin 0.1.1' ]] \
+    && grep -Fq '## v0.1.1' CHANGELOG.md; then
+    ok 'versão 0.1.1 consistente'
+else
+    error 'install.sh --version ou CHANGELOG está inconsistente'
+    controls_fail=1
+fi
+
+if ! help_output=$(bash install.sh --help 2>&1); then
+    error '--help retornou status diferente de zero'
+    controls_fail=1
+    help_output=''
+fi
+help_flags=(
+    --dry-run --verbose --plan --doctor --version --yes --no-packages --no-pacman
+    --no-flatpak --no-aur --no-services --no-codex --no-git --no-ssh --no-github
+)
+for flag in "${help_flags[@]}"; do
+    if ! grep -Fq -- "$flag" <<<"$help_output"; then
+        error "--help não contém $flag"
+        controls_fail=1
+    fi
+done
+
+if unknown_output=$(bash install.sh --unknown-flag 2>&1); then
+    error 'flag desconhecida retornou sucesso'
+    controls_fail=1
+elif grep -Fq 'opção desconhecida: --unknown-flag' <<<"$unknown_output"; then
+    ok 'flag desconhecida falha com mensagem clara'
+else
+    error 'flag desconhecida falhou sem mensagem clara'
+    controls_fail=1
+fi
+if bash install.sh --version --unknown-flag >/dev/null 2>&1; then
+    error '--version ignorou flag desconhecida combinada'
+    controls_fail=1
+else
+    ok '--version não ignora argumentos inválidos'
+fi
+
+if plan_output=$(bash install.sh --plan 2>&1) \
+    && grep -Fq 'leanin 0.1.1' <<<"$plan_output" \
+    && grep -Fq '> [ok] pacman: 11 pacotes' <<<"$plan_output" \
+    && grep -Fq '> [ok] Flatpak: 6 apps' <<<"$plan_output" \
+    && grep -Fq '> [ok] AUR: 3 pacotes' <<<"$plan_output" \
+    && grep -Fq '> [ok] serviços system: 1 serviço' <<<"$plan_output" \
+    && grep -Fq '> [ok] serviços user: 0 serviços' <<<"$plan_output" \
+    && grep -Fq '> [info] Codex: habilitado' <<<"$plan_output" \
+    && grep -Fq '> [info] Git: habilitado' <<<"$plan_output" \
+    && grep -Fq '> [info] SSH/GitHub: habilitado' <<<"$plan_output" \
+    && ! grep -Fq '[ask]' <<<"$plan_output" \
+    && ! grep -Fq '> Etapa' <<<"$plan_output" \
+    && ! grep -Eq '(pacman -S|flatpak (install|remote-add)|yay -S|paru -S|systemctl .*enable|npm (config|install)|gh (auth|ssh-key)|ssh-keygen)' <<<"$plan_output"; then
+    ok '--plan é somente leitura e não interativo'
+else
+    error '--plan não produziu o plano resumido esperado'
+    controls_fail=1
+fi
+
+if verbose_plan_output=$(bash install.sh --plan --verbose 2>&1) \
+    && grep -Fqx 'pacman' <<<"$verbose_plan_output" \
+    && grep -Fq 'audio      easyeffects' <<<"$verbose_plan_output" \
+    && grep -Fq 'base ' <<<"$verbose_plan_output" \
+    && grep -Fqx 'Flatpak' <<<"$verbose_plan_output" \
+    && grep -Fq 'chat ' <<<"$verbose_plan_output" \
+    && grep -Fq 'games ' <<<"$verbose_plan_output" \
+    && grep -Fq 'org.vinegarhq.Sober' <<<"$verbose_plan_output" \
+    && grep -Fqx 'AUR' <<<"$verbose_plan_output" \
+    && grep -Fq 'browsers ' <<<"$verbose_plan_output" \
+    && grep -Fqx 'serviços' <<<"$verbose_plan_output" \
+    && grep -Fq 'system ' <<<"$verbose_plan_output" \
+    && ! grep -Fq 'categories' <<<"$verbose_plan_output" \
+    && ! grep -Fq '[ask]' <<<"$verbose_plan_output"; then
+    ok '--plan --verbose permanece somente leitura'
+else
+    error '--plan --verbose falhou ou pediu input'
+    controls_fail=1
+fi
+
+if no_flatpak_output=$(LEANIN_CI=1 bash install.sh --dry-run --no-flatpak --no-ssh --no-github 2>&1) \
+    && grep -Fq '[skip] Flatpak desativado por flag' <<<"$no_flatpak_output" \
+    && ! grep -Fq 'org.vinegarhq.Sober' <<<"$no_flatpak_output"; then
+    ok '--no-flatpak não processa Sober'
+else
+    error '--no-flatpak não pulou Sober corretamente'
+    controls_fail=1
+fi
+
+if no_packages_output=$(LEANIN_CI=1 bash install.sh --dry-run --no-packages --no-ssh --no-github 2>&1) \
+    && grep -Fq '[skip] Flatpak desativado por flag' <<<"$no_packages_output" \
+    && ! grep -Fq 'org.vinegarhq.Sober' <<<"$no_packages_output"; then
+    ok '--no-packages não processa Sober'
+else
+    error '--no-packages não pulou Sober corretamente'
+    controls_fail=1
+fi
+
+if grep -RE '(yesno|ask_[a-z_]+).*org\.vinegarhq\.Sober' install.sh lib >/dev/null 2>&1; then
+    error 'Sober introduziu prompt por pacote'
+    controls_fail=1
+else
+    ok 'Sober não introduz prompt por pacote'
+fi
+
+if [[ -r /etc/os-release ]] && grep -Eq '^ID=arch$|^ID_LIKE=.*arch' /etc/os-release; then
+    doctor_status=0
+    doctor_output=$(bash install.sh --doctor 2>&1) || doctor_status=$?
+    if grep -Fq $'doctor\n\nsistema' <<<"$doctor_output" \
+        && grep -Fq $'pacotes\n' <<<"$doctor_output" \
+        && grep -Fq $'ferramentas\n' <<<"$doctor_output" \
+        && grep -Fq $'integrações\n' <<<"$doctor_output" \
+        && grep -Fq $'serviços\n' <<<"$doctor_output" \
+        && ! grep -Fq '[ask]' <<<"$doctor_output"; then
+        if (( doctor_status == 0 )) && grep -Fq '[ok] diagnóstico concluído' <<<"$doctor_output"; then
+            ok '--doctor local é somente leitura e não interativo'
+        elif grep -Fq '[error] diagnóstico encontrou' <<<"$doctor_output"; then
+            skip '--doctor local encontrou um problema real do host; modo permanece somente leitura'
+        else
+            error '--doctor local retornou diagnóstico incompleto'
+            controls_fail=1
+        fi
+    else
+        error '--doctor local falhou'
+        controls_fail=1
+    fi
+else
+    skip '--doctor local requer host Arch; validação portátil será usada'
+fi
+
+if ci_doctor_output=$(LEANIN_CI=1 bash install.sh --doctor 2>&1) \
+    && grep -Fq $'doctor\n\nsistema' <<<"$ci_doctor_output" \
+    && grep -Fq '[info] modo CI: diagnóstico do host pulado' <<<"$ci_doctor_output" \
+    && grep -Fq '[ok] lista services/system disponível' <<<"$ci_doctor_output" \
+    && grep -Fq '[ok] diagnóstico concluído' <<<"$ci_doctor_output" \
+    && ! grep -Fq '[ask]' <<<"$ci_doctor_output"; then
+    ok 'LEANIN_CI=1 aceita --doctor'
+else
+    error 'LEANIN_CI=1 --doctor falhou'
+    controls_fail=1
+fi
+if legacy_ci_output=$(ARCHBOOT_CI=1 bash install.sh --doctor 2>&1) \
+    && grep -Fq '[info] modo CI: diagnóstico do host pulado' <<<"$legacy_ci_output" \
+    && grep -Fq '[ok] diagnóstico concluído' <<<"$legacy_ci_output"; then
+    ok 'ARCHBOOT_CI=1 permanece como alias de compatibilidade'
+else
+    error 'ARCHBOOT_CI=1 não preservou compatibilidade'
+    controls_fail=1
+fi
+
+doctor_mutation_regex='pacman[[:space:]]+-S|flatpak[[:space:]]+(install|remote-add)|(^|[[:space:]])(yay|paru)[[:space:]]+-S|npm[[:space:]]+install|gh[[:space:]]+ssh-key[[:space:]]+(add|delete)|systemctl([^[:cntrl:]]*)enable([^[:cntrl:]]*)--now'
+if grep -En "$doctor_mutation_regex" lib/doctor >/dev/null 2>&1; then
+    error '--doctor contém comando mutável'
+    controls_fail=1
+else
+    ok '--doctor não contém comandos de instalação, cadastro ou ativação'
+fi
+
+if ci_plan_output=$(LEANIN_CI=1 bash install.sh --plan 2>&1) \
+    && grep -Fq 'pacman: 11 pacotes' <<<"$ci_plan_output"; then
+    ok 'LEANIN_CI=1 aceita --plan'
+else
+    error 'LEANIN_CI=1 --plan falhou'
+    controls_fail=1
+fi
+
+plan_flag_cases=(
+    '--no-pacman|pacman: desativado'
+    '--no-flatpak|Flatpak: desativado'
+    '--no-aur|AUR: desativado'
+    '--no-services|serviços system: desativado'
+    '--no-codex|Codex: desativado'
+    '--no-git|Git: desativado'
+    '--no-github|GitHub: desativado'
+)
+for plan_case in "${plan_flag_cases[@]}"; do
+    flag=${plan_case%%|*}
+    expected=${plan_case#*|}
+    if ! flag_output=$(bash install.sh --plan "$flag" 2>&1) \
+        || ! grep -Fq "$expected" <<<"$flag_output"; then
+        error "$flag não alterou o plano como esperado"
+        controls_fail=1
+    fi
+done
+
+ci_args=(
+    --dry-run --no-packages --no-services --no-ssh --no-github --no-codex
+)
+if ci_dry_output=$(LEANIN_CI=1 bash install.sh "${ci_args[@]}" 2>&1) \
+    && grep -Fq '[ok] modo CI dry-run' <<<"$ci_dry_output" \
+    && grep -Fq '[skip] pacman desativado por flag' <<<"$ci_dry_output" \
+    && grep -Fq '[skip] Flatpak desativado por flag' <<<"$ci_dry_output" \
+    && grep -Fq '[skip] AUR desativado por flag' <<<"$ci_dry_output" \
+    && grep -Fq '[skip] serviços desativados por flag' <<<"$ci_dry_output" \
+    && grep -Fq '[skip] Codex desativado por flag' <<<"$ci_dry_output" \
+    && grep -Fq '[skip] SSH desativado por flag' <<<"$ci_dry_output" \
+    && grep -Fq '[skip] GitHub desativado por flag' <<<"$ci_dry_output" \
+    && grep -Fq '[info] pacman: 0 planejados, 0 pulados' <<<"$ci_dry_output" \
+    && grep -Fq '[info] desativados por flag:' <<<"$ci_dry_output" \
+    && ! grep -Fq 'log: /dev/null' <<<"$ci_dry_output" \
+    && ! grep -Eq '\[dry-run\].*(pacman -S|flatpak (install|remote-add)|yay -S|paru -S|systemctl .*enable|npm install|gh (auth|ssh-key)|ssh-keygen)' <<<"$ci_dry_output"; then
+    ok 'CI dry-run respeita flags sem executar fontes desativadas'
+else
+    error 'CI dry-run ou flags --no-* falharam'
+    controls_fail=1
+fi
+
+layout_args=(--dry-run --no-packages --no-services --no-codex --no-git --no-ssh --no-github)
+if layout_output=$(LEANIN_CI=1 bash install.sh "${layout_args[@]}" 2>&1) \
+    && grep -Fq '> Etapa 1/3: sistema' <<<"$layout_output" \
+    && grep -Fq '> Etapa 2/3: plano' <<<"$layout_output" \
+    && grep -Fq '> Etapa 3/3: resumo' <<<"$layout_output" \
+    && grep -Fq $'pacotes\n> [info]' <<<"$layout_output" \
+    && grep -Fq $'configuração\n> [info]' <<<"$layout_output" \
+    && ! grep -Fq 'finalizando integrações' <<<"$layout_output" \
+    && ! grep -Fq '> Etapa 4/' <<<"$layout_output"; then
+    ok 'etapas ativas usam total dinâmico e resumo separado'
+else
+    error 'ordem ou total das etapas ativas está inconsistente'
+    controls_fail=1
+fi
+
+if default_dry_output=$(LEANIN_CI=1 bash install.sh --dry-run --no-ssh --no-github 2>&1) \
+    && grep -Fq '> Etapa 3/7: pacotes' <<<"$default_dry_output" \
+    && grep -Fq '> Etapa 7/7: resumo' <<<"$default_dry_output" \
+    && ! grep -Fq '> Etapa 3/10: pacman base' <<<"$default_dry_output" \
+    && grep -Fq '> [ok] dry-run concluído' <<<"$default_dry_output"; then
+    ok 'pacotes usam uma etapa clara e o dry-run conclui todas as etapas ativas'
+else
+    error 'dry-run sem flags de fonte encerrou antes do resumo'
+    controls_fail=1
+fi
+
+if output_quality=$(LEANIN_CI=1 bash install.sh --dry-run --no-ssh --no-github 2>&1) \
+    && grep -Fq '> [dry-run]' <<<"$output_quality" \
+    && grep -Fq $'pacotes\n> [info]' <<<"$output_quality" \
+    && grep -Fq $'configuração\n> [info]' <<<"$output_quality" \
+    && ! grep -Fq 'finalizando integrações' <<<"$output_quality" \
+    && ! grep -Fq 'Identity added:' <<<"$output_quality" \
+    && ! grep -Fq 'ssh_askpass:' <<<"$output_quality" \
+    && awk 'NF == 0 { blank += 1; if (blank > 2) exit 1 } NF != 0 { blank = 0 }' \
+        <<<"$output_quality"; then
+    ok 'dry-run mantém grupos, espaçamento e saída limpa'
+else
+    error 'dry-run perdeu agrupamento, espaçamento ou silêncio de comandos internos'
+    controls_fail=1
+fi
+
+if ! grep -Fq 'next_step' lib/control \
+    || grep -Fq "next_step 'finalizando integrações'" lib/control; then
+    error 'fluxo ainda contém etapa final vazia ou sem contador centralizado'
+    controls_fail=1
+else
+    ok 'fluxo não contém etapa final vazia'
+fi
+
+if plan_log_output=$(LEANIN_CI=1 bash install.sh --plan 2>&1) \
+    && ! grep -Fq 'log criado:' <<<"$plan_log_output"; then
+    ok '--plan não cria nem anuncia log de execução'
+else
+    error '--plan criou ou anunciou log de execução'
+    controls_fail=1
+fi
+
+yes_args=(--dry-run --yes --no-packages --no-services --no-ssh --no-github --no-codex --no-git)
+if yes_output=$(LEANIN_CI=1 bash install.sh "${yes_args[@]}" 2>&1) \
+    && ! grep -Fq '[ask]' <<<"$yes_output" \
+    && grep -Fq '[skip] SSH desativado por flag' <<<"$yes_output"; then
+    ok '--yes combinado com --no-* não bloqueia nem executa ações desativadas'
+else
+    error '--yes combinado com --no-* falhou ou pediu input'
+    controls_fail=1
+fi
+
+no_ssh_args=(--dry-run --no-packages --no-services --no-ssh --no-codex)
+if no_ssh_output=$(LEANIN_CI=1 bash install.sh "${no_ssh_args[@]}" 2>&1) \
+    && grep -Fq '[skip] SSH desativado por flag' <<<"$no_ssh_output" \
+    && grep -Fq '[skip] GitHub desativado por flag' <<<"$no_ssh_output" \
+    && grep -Fq 'GitHub SSH: desativado por flag' <<<"$no_ssh_output"; then
+    ok '--no-ssh implica --no-github'
+else
+    error '--no-ssh não desativou a integração GitHub'
+    controls_fail=1
+fi
+
+if no_github_output=$(LEANIN_CI=1 bash install.sh --dry-run --no-packages --no-services --no-codex --no-git --no-github 2>&1) \
+    && grep -Fq '[skip] GitHub desativado por flag' <<<"$no_github_output" \
+    && grep -Fq '> Etapa 3/4: SSH' <<<"$no_github_output" \
+    && ! grep -Fq '> Etapa 4/4: GitHub' <<<"$no_github_output"; then
+    ok '--no-github pula somente a integração GitHub'
+else
+    error '--no-github também pulou SSH ou manteve etapa GitHub'
+    controls_fail=1
+fi
+
+if help_output=$(bash install.sh --help 2>&1) \
+    && grep -Fq 'Uso: bash install.sh [opções]' <<<"$help_output" \
+    && ! grep -Fq 'baixando projeto completo' <<<"$help_output"; then
+    ok '--help encerra antes do bootstrap remoto'
+else
+    error '--help tentou bootstrap ou não mostrou a ajuda'
+    controls_fail=1
+fi
+
+if LEANIN_CI=1 bash install.sh >/dev/null 2>&1; then
+    error 'LEANIN_CI=1 permitiu execução sem --dry-run/--plan'
+    controls_fail=1
+else
+    ok 'LEANIN_CI=1 bloqueia execução mutável'
+fi
+if LEANIN_CI=invalid bash install.sh --plan >/dev/null 2>&1; then
+    error 'LEANIN_CI inválido foi aceito'
+    controls_fail=1
+else
+    ok 'LEANIN_CI inválido falha de forma explícita'
+fi
+
+# A expressão é intencionalmente literal para validar o código-fonte.
+# shellcheck disable=SC2016
+if grep -Fq 'elif (( DRY_RUN )); then' lib/control \
+    && grep -Fq "ok 'dry-run concluído'" lib/control \
+    && grep -Fq 'error "concluído com $failure_count falha(s)"' lib/control \
+    && grep -Fq 'summary_counts pacman' lib/control \
+    && grep -Fq 'summary_counts serviços' lib/control; then
+    ok 'resumo distingue sucesso, falhas e contagens por fonte'
+else
+    error 'resumo final não preserva diagnóstico e contagens esperados'
+    controls_fail=1
+fi
+
+if bash -c '
+    set -Eeuo pipefail
+    source lib/ask
+    ASSUME_YES=1
+    if yesno "ação perigosa" n; then exit 1; fi
+    yesno "ação segura" s
+    value=unexpected
+    prompt value "valor" safe-default
+    [[ $value == safe-default ]]
+'; then
+    ok '--yes preserva defaults seguros'
+else
+    error '--yes confirmou ação com default não ou pediu input'
+    controls_fail=1
+fi
+
+ask_prompt_test() {
+    local input=$1 expected=$2 command='' output='' status=0
+
+    printf -v command 'set -Eeuo pipefail; source %q; source %q; yesno %q n' \
+        "$ROOT/lib/log" "$ROOT/lib/ask" 'teste'
+    if output=$(printf '%b' "$input" | script -qec "$command" /dev/null 2>&1); then
+        status=0
+    else
+        status=$?
+    fi
+    [[ $status == "$expected" ]] \
+        && grep -Fq '> [?] teste [s/N]' <<<"$output"
+}
+
+ask_prompt_value_test() {
+    local command='' output=''
+
+    # $value deve ser expandido pelo shell dentro do pseudo-terminal.
+    # shellcheck disable=SC2016
+    printf -v command 'set -Eeuo pipefail; source %q; source %q; prompt value %q %q; [[ $value == %q ]]' \
+        "$ROOT/lib/log" "$ROOT/lib/ask" 'título' 'person' 'personal'
+    output=$(printf 'personal\n' | script -qec "$command" /dev/null 2>&1) \
+        && grep -Fq '> [?] título [person]:' <<<"$output"
+}
+
+if command -v script >/dev/null 2>&1 \
+    && ask_prompt_test '\n' 1 \
+    && ask_prompt_test 'n\n' 1 \
+    && ask_prompt_test 'N\n' 1 \
+    && ask_prompt_test 's\n' 0 \
+    && ask_prompt_test 'S\n' 0 \
+    && ask_prompt_test 'inválido\ns\n' 0 \
+    && ask_prompt_value_test; then
+    ok 'prompts usam /dev/tty mesmo quando stdin vem de pipe'
+elif ! command -v script >/dev/null 2>&1; then
+    skip 'teste de pseudo-terminal indisponível (script ausente)'
+else
+    error 'prompt s/N não leu /dev/tty ou não preservou respostas esperadas'
+    controls_fail=1
+fi
+
+if command -v setsid >/dev/null 2>&1 \
+    && ! setsid bash -c '
+        set -Eeuo pipefail
+        source lib/log
+        source lib/ask
+        yesno "teste sem tty" n
+    ' </dev/null >/dev/null 2>&1; then
+    ok 'prompts sem /dev/tty usam default seguro sem travar'
+elif ! command -v setsid >/dev/null 2>&1; then
+    skip 'teste sem terminal indisponível (setsid ausente)'
+else
+    error 'prompt sem /dev/tty não retornou o default seguro'
+    controls_fail=1
+fi
+
+if bash -c '
+    set -Eeuo pipefail
+    source lib/ask
+    _ask_read_tty() { exit 99; }
+    ASSUME_YES=1
+    if yesno "teste" n; then exit 1; fi
+    value=unexpected
+    prompt value "teste" default
+    [[ $value == default ]]
+    unset ASSUME_YES
+    DRY_RUN=1
+    if yesno "teste" n; then exit 1; fi
+    if ask_reconfigure "teste"; then exit 1; fi
+    value=unexpected
+    prompt value "teste" default
+    [[ $value == default ]]
+    DRY_RUN=0
+    PLAN_ONLY=1
+    if yesno "teste" n; then exit 1; fi
+    if ask_reconfigure "teste"; then exit 1; fi
+    PLAN_ONLY=0
+    DOCTOR_ONLY=1
+    if yesno "teste" n; then exit 1; fi
+    if ask_reconfigure "teste"; then exit 1; fi
+    DOCTOR_ONLY=0
+    CI_MODE=1
+    if yesno "teste" n; then exit 1; fi
+    if ask_reconfigure "teste"; then exit 1; fi
+' >/dev/null 2>&1; then
+    ok 'dry-run, --yes, --plan, --doctor e CI não leem prompts'
+else
+    error 'modo não interativo tentou ler /dev/tty'
+    controls_fail=1
+fi
+
+if pipe_dry_output=$(printf '\n' | timeout 15 env LEANIN_CI=1 bash install.sh --dry-run \
+    --no-packages --no-services --no-codex --no-git --no-ssh --no-github 2>&1) \
+    && ! grep -Fq '> [?]' <<<"$pipe_dry_output"; then
+    ok 'stdin em pipe não trava o dry-run'
+else
+    error 'dry-run com stdin em pipe travou ou pediu input'
+    controls_fail=1
+fi
+
+doctor_home="$ssh_test_home/doctor-home"
+if HOME="$doctor_home" LEANIN_ROOT="$ROOT" CI_MODE=1 bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/env
+    source lib/doctor
+    doctor_run
+    [[ ! -e $HOME/.ssh && ! -e $HOME/.codex && ! -e $HOME/.config ]]
+' >/dev/null 2>&1; then
+    ok 'doctor CI não cria arquivos no HOME temporário'
+else
+    error 'doctor CI criou estado no HOME temporário'
+    controls_fail=1
+fi
+
+if ask_reconfigure_output=$(bash -c '
+    set -Eeuo pipefail
+    source lib/ask
+    DRY_RUN=1
+    if ask_reconfigure "configuração existente"; then exit 1; fi
+' 2>&1) \
+    && grep -Fq '[dry-run] perguntaria se deve refazer configuração existente' <<<"$ask_reconfigure_output" \
+    && bash -c '
+        set -Eeuo pipefail
+        source lib/ask
+        ASSUME_YES=1
+        if ask_reconfigure "configuração existente"; then exit 1; fi
+    '; then
+    ok 'reconfiguração usa default não em dry-run e --yes'
+else
+    error 'reconfiguração não preserva default seguro'
+    controls_fail=1
+fi
+
+if bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ask
+    source lib/git
+    ASSUME_YES=1
+    DRY_RUN=0
+    LOG_FILE=/dev/null
+    GIT_NAME=""
+    GIT_EMAIL=""
+    FAILURES=()
+    git() {
+        if [[ $1 == config && $2 == --global && $3 == --get ]]; then
+            case $4 in
+                user.name) printf "existing name\n" ;;
+                user.email) printf "existing@example.test\n" ;;
+                init.defaultBranch) printf "main\n" ;;
+                pull.rebase) printf "false\n" ;;
+                core.editor) printf "code --wait\n" ;;
+            esac
+            return 0
+        fi
+        exit 91
+    }
+    command_exists() { [[ $1 != code ]]; }
+    run_cmd() { exit 90; }
+    configure_git
+    [[ $GIT_NAME == "existing name" ]]
+    [[ $GIT_EMAIL == "existing@example.test" ]]
+' >/dev/null 2>&1; then
+    ok '--yes não sobrescreve identidade Git existente'
+else
+    error '--yes tentou sobrescrever identidade Git existente'
+    controls_fail=1
+fi
+
+if bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ask
+    source lib/git
+    ASSUME_YES=1
+    DRY_RUN=0
+    LOG_FILE=/dev/null
+    git() { printf "master\n"; }
+    run_cmd() { exit 90; }
+    _configure_git_value init.defaultBranch main "branch padrão Git"
+' >/dev/null 2>&1; then
+    ok '--yes não troca preferências Git existentes'
+else
+    error '--yes tentou trocar preferência Git existente'
+    controls_fail=1
+fi
+
+if bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ask
+    source lib/git
+    DRY_RUN=0
+    LOG_FILE=/dev/null
+    FAILURES=()
+    git() { return 1; }
+    run_cmd() { return 1; }
+    if _configure_git_identity name user@example.test; then exit 1; fi
+    [[ ${FAILURES[*]} == *git:identity* ]]
+    if _configure_git_value init.defaultBranch main "branch padrão Git"; then exit 1; fi
+    [[ ${FAILURES[*]} == *git:init.defaultBranch* ]]
+' >/dev/null 2>&1; then
+    ok 'falhas de configuração Git são registradas'
+else
+    error 'falhas de configuração Git foram tratadas como sucesso'
+    controls_fail=1
+fi
+
+if bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ask
+    source lib/service
+    LOG_FILE=/dev/null
+    FAILURES=()
+    SYSTEM_SERVICES=(mock.service)
+    USER_SERVICES=(mock-user.service)
+    command_exists() { [[ $1 != systemctl ]]; }
+    activate_services
+    ((${#SERVICES_SKIPPED[@]} == 2))
+    ((${#FAILURES[@]} == 0))
+' >/dev/null 2>&1; then
+    ok 'systemctl ausente pula serviços sem sucesso falso'
+else
+    error 'systemctl ausente não foi tratado de forma segura'
+    controls_fail=1
+fi
+
+if (( controls_fail )); then
+    ((failures += 1))
+fi
+
+fake_bin="$ssh_test_home/bin"
+sudo_marker="$ssh_test_home/sudo-marker"
+mkdir -p "$fake_bin"
+cat >"$fake_bin/sudo" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$sudo_marker"
+EOF
+chmod +x "$fake_bin/sudo"
+if PATH="$fake_bin:$PATH" SUDO_MARKER="$sudo_marker" bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/run
+    sudo() { return 0; }
+    DRY_RUN=0
+    VERBOSE=0
+    LOG_FILE=/dev/null
+    run_sudo "mock sudo" pacman -S mock-package
+' >/dev/null 2>&1 \
+    && grep -Fqx -- '-- pacman -S mock-package' "$sudo_marker"; then
+    ok 'run_sudo usa o binário sudo, não a função de validação'
+else
+    error 'run_sudo não executou o binário sudo esperado'
+    ((failures += 1))
+fi
+
+ssh_add_log="$ssh_test_home/ssh-add.log"
+mkdir -p "$fake_bin"
+cat >"$fake_bin/ssh-add" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n ${SSH_ADD_MARKER:-} ]]; then
+    exec 3>>"$SSH_ADD_MARKER"
+    printf 'askpass=%s require=%s\n' "${SSH_ASKPASS-unset}" "${SSH_ASKPASS_REQUIRE-unset}" >&3
+    for fd in 0 1 2; do
+        printf 'fd%s=' "$fd" >&3
+        readlink "/proc/$$/fd/$fd" >&3
+    done
+    exec 3>&-
+fi
+printf 'Identity added: %s (mock)\n' "${1:-unknown}"
+EOF
+chmod +x "$fake_bin/ssh-add"
+mkdir -p "$ssh_test_home/.ssh"
+printf 'private mock\n' >"$ssh_test_home/.ssh/id_ed25519"
+printf 'ssh-ed25519 AAAATEST mock@example\n' >"$ssh_test_home/.ssh/id_ed25519.pub"
+if ssh_add_output=$(HOME="$ssh_test_home" PATH="$fake_bin:$PATH" SSH_AUTH_SOCK=mock \
+    bash -c '
+        set -Eeuo pipefail
+        source lib/log
+        source lib/ask
+        source lib/env
+        source lib/run
+        source lib/ssh
+        DRY_RUN=0
+        VERBOSE=0
+        LOG_FILE=$1
+        FAILURES=()
+        GIT_EMAIL=mock@example
+        # A regression test must never consult the terminal or answer.
+        ask_reconfigure() { return 1; }
+        _ssh_tty_path() { printf "%s" "$HOME/tty-unavailable"; }
+        configure_ssh
+    ' _ "$ssh_add_log" 2>&1) \
+    && ! grep -Fq 'Identity added:' <<<"$ssh_add_output" \
+    && ! grep -Fq 'ssh-keygen' <<<"$ssh_add_output" \
+    && grep -Fq 'não há terminal disponível para adicionar a chave ao ssh-agent' <<<"$ssh_add_output" \
+    && [[ ! -e $ssh_add_log ]]; then
+    ok 'chave SSH existente é mantida sem chamar ssh-add fora do terminal'
+else
+    error 'chave SSH existente foi refeita ou ssh-add ignorou o terminal'
+    ((failures += 1))
+fi
+
+ssh_add_tty="$ssh_test_home/ssh-add.tty"
+ssh_add_marker="$ssh_test_home/ssh-add.marker"
+: >"$ssh_add_tty"
+: >"$ssh_add_marker"
+if ssh_add_tty_output=$(HOME="$ssh_test_home" PATH="$fake_bin:$PATH" SSH_AUTH_SOCK=mock \
+    SSH_ADD_MARKER="$ssh_add_marker" TTY_FILE="$ssh_add_tty" bash -c '
+        set -Eeuo pipefail
+        source lib/log
+        source lib/ask
+        source lib/env
+        source lib/run
+        source lib/ssh
+        DRY_RUN=0
+        VERBOSE=0
+        LOG_FILE=/dev/null
+        FAILURES=()
+        GIT_EMAIL=mock@example
+        ask_reconfigure() { return 1; }
+        _ssh_tty_path() { printf "%s" "$TTY_FILE"; }
+        configure_ssh
+    ' 2>&1) \
+    && ! grep -Fq 'Identity added:' <<<"$ssh_add_tty_output" \
+    && grep -Fqx 'askpass= require=never' "$ssh_add_marker" \
+    && grep -Fqx "fd0=$ssh_add_tty" "$ssh_add_marker" \
+    && grep -Fqx "fd1=$ssh_add_tty" "$ssh_add_marker" \
+    && grep -Fqx "fd2=$ssh_add_tty" "$ssh_add_marker"; then
+    ok 'ssh-add usa terminal dedicado e neutraliza askpass'
+else
+    error 'ssh-add não isolou a passphrase no terminal'
+    ((failures += 1))
+fi
+
+tty_file="$ssh_test_home/ssh-keygen.tty"
+keygen_marker="$ssh_test_home/ssh-keygen.marker"
+: >"$tty_file"
+cat >"$fake_bin/ssh-keygen" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf 'askpass=%s require=%s\n' "${SSH_ASKPASS-unset}" "${SSH_ASKPASS_REQUIRE-unset}" >>"$SSH_KEYGEN_MARKER"
+for fd in 0 1 2; do
+    printf 'fd%s=' "$fd" >>"$SSH_KEYGEN_MARKER"
+    readlink "/proc/self/fd/$fd" >>"$SSH_KEYGEN_MARKER"
+done
+private=''
+while (($#)); do
+    case $1 in
+        -f) private=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[[ -n $private ]]
+if [[ ${SSH_KEYGEN_MODE:-success} == fail ]]; then
+    printf 'partial private\n' >"$private"
+    printf 'partial public\n' >"$private.pub"
+    exit 1
+fi
+printf 'generated private\n' >"$private"
+printf 'ssh-ed25519 AAAAGENERATED mock@example\n' >"$private.pub"
+EOF
+chmod +x "$fake_bin/ssh-keygen"
+
+ssh_keygen_case() {
+    local mode=$1 home='' output=''
+    home="$ssh_test_home/keygen-$mode"
+    mkdir -p "$home/.ssh"
+    printf 'original private\n' >"$home/.ssh/id_ed25519"
+    printf 'ssh-ed25519 AAAAORIGINAL mock@example\n' >"$home/.ssh/id_ed25519.pub"
+    chmod 700 "$home/.ssh"
+    chmod 600 "$home/.ssh/id_ed25519"
+    chmod 644 "$home/.ssh/id_ed25519.pub"
+    : >"$keygen_marker"
+
+    output=$(HOME="$home" PATH="$fake_bin:$PATH" SSH_AUTH_SOCK=mock \
+        SSH_KEYGEN_MODE="$mode" SSH_KEYGEN_MARKER="$keygen_marker" TTY_FILE="$tty_file" \
+        bash -c '
+            set -Eeuo pipefail
+            source lib/log
+            source lib/ask
+            source lib/env
+            source lib/run
+            source lib/ssh
+            DRY_RUN=0
+            VERBOSE=0
+            LOG_FILE=/dev/null
+            FAILURES=()
+            GIT_EMAIL=mock@example
+            ask_reconfigure() { return 0; }
+            _ssh_tty_path() { printf "%s" "$TTY_FILE"; }
+            if [[ $1 == fail ]]; then
+                if configure_ssh; then exit 1; fi
+            else
+                configure_ssh
+            fi
+        ' _ "$mode" 2>&1)
+
+    if [[ $mode == fail ]]; then
+        [[ $(<"$home/.ssh/id_ed25519") == 'original private' ]]
+        [[ $(<"$home/.ssh/id_ed25519.pub") == 'ssh-ed25519 AAAAORIGINAL mock@example' ]]
+        [[ $output != *ssh_askpass* ]]
+    else
+        [[ $(<"$home/.ssh/id_ed25519") == 'generated private' ]]
+        [[ $(<"$home/.ssh/id_ed25519.pub") == 'ssh-ed25519 AAAAGENERATED mock@example' ]]
+        grep -Fqx "askpass= require=never" "$keygen_marker"
+        grep -Fqx "fd0=$tty_file" "$keygen_marker"
+        grep -Fqx "fd1=$tty_file" "$keygen_marker"
+        grep -Fqx "fd2=$tty_file" "$keygen_marker"
+        [[ $output != *ssh_askpass* ]]
+    fi
+}
+
+if ssh_keygen_case success >/dev/null 2>&1 \
+    && ssh_keygen_case fail >/dev/null 2>&1; then
+    ok 'ssh-keygen usa terminal dedicado e restaura chave após falha parcial'
+else
+    error 'ssh-keygen não isolou o terminal ou não restaurou a chave anterior'
+    ((failures += 1))
+fi
+
+no_tty_home="$ssh_test_home/keygen-no-tty"
+no_tty_marker="$ssh_test_home/keygen-no-tty.marker"
+mkdir -p "$no_tty_home/.ssh"
+printf 'original private\n' >"$no_tty_home/.ssh/id_ed25519"
+printf 'ssh-ed25519 AAAAORIGINAL mock@example\n' >"$no_tty_home/.ssh/id_ed25519.pub"
+chmod 700 "$no_tty_home/.ssh"
+chmod 600 "$no_tty_home/.ssh/id_ed25519"
+chmod 644 "$no_tty_home/.ssh/id_ed25519.pub"
+: >"$no_tty_marker"
+if no_tty_output=$(HOME="$no_tty_home" PATH="$fake_bin:$PATH" SSH_AUTH_SOCK=mock \
+    SSH_KEYGEN_MARKER="$no_tty_marker" TTY_FILE="$ssh_test_home/tty-missing" \
+    bash -c '
+        set -Eeuo pipefail
+        source lib/log
+        source lib/ask
+        source lib/env
+        source lib/run
+        source lib/ssh
+        DRY_RUN=0
+        VERBOSE=0
+        LOG_FILE=/dev/null
+        FAILURES=()
+        GIT_EMAIL=mock@example
+        ask_reconfigure() { return 0; }
+        _ssh_tty_path() { printf "%s" "$TTY_FILE"; }
+        if configure_ssh; then exit 1; fi
+        [[ $(<"$HOME/.ssh/id_ed25519") == "original private" ]]
+        [[ $(<"$HOME/.ssh/id_ed25519.pub") == "ssh-ed25519 AAAAORIGINAL mock@example" ]]
+        ! compgen -G "$HOME/.ssh/id_ed25519.bak.*" >/dev/null
+    ' 2>&1) \
+    && [[ ! -s $no_tty_marker ]] \
+    && grep -Fq 'não há terminal disponível para gerar chave SSH interativa' <<<"$no_tty_output"; then
+    ok 'sem TTY a geração SSH falha sem mover ou criar chave parcial'
+else
+    error 'sem TTY a geração SSH alterou a chave existente ou tentou ssh-keygen'
+    ((failures += 1))
+fi
+
+# A expressão precisa permanecer literal para validar os redirecionamentos.
+# shellcheck disable=SC2016
+if grep -Fq 'SSH_ASKPASS_REQUIRE=never' lib/ssh \
+    && grep -Fq 'exec {fd}<>"$tty"' lib/ssh \
+    && grep -Fq '<&"$fd" >&"$fd" 2>&"$fd"' lib/ssh; then
+    ok 'geração SSH redireciona descritores para o terminal e neutraliza askpass'
+else
+    error 'geração SSH não isola ssh-keygen do stdin do pipe'
+    ((failures += 1))
+fi
+
+if HOME="$ssh_test_home" bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ssh
+    DRY_RUN=0
+    private=$HOME/.ssh/id_ed25519
+    public=$private.pub
+    _backup_ssh_key "$private" "$public"
+    [[ ! -e $private && ! -e $public ]]
+    compgen -G "$private.bak.*" >/dev/null
+    compgen -G "$public.bak.*" >/dev/null
+' >/dev/null 2>&1; then
+    ok 'regeneração SSH preserva backups antes de substituir a chave'
+else
+    error 'backup de chave SSH não foi criado antes da regeneração'
+    ((failures += 1))
+fi
+
+if HOME="$ssh_test_home" bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ssh
+    private=$HOME/.ssh/restore-test
+    public=$private.pub
+    printf private >"$private"
+    printf public >"$public"
+    _backup_ssh_key "$private" "$public"
+    printf partial-private >"$private"
+    printf partial-public >"$public"
+    _restore_ssh_backup "$private" "$public"
+    [[ $(<"$private") == private ]]
+    [[ $(<"$public") == public ]]
+' >/dev/null 2>&1; then
+    ok 'falha de geração SSH pode restaurar a chave anterior'
+else
+    error 'restauração de backup SSH falhou'
+    ((failures += 1))
+fi
+
+github_api_backend_test() {
+    HOME="$ssh_test_home" GH_API_MARKER="$ssh_test_home/github-api.marker" bash -c '
+        set -Eeuo pipefail
+        source lib/log
+        source lib/env
+        source lib/run
+        source lib/gh
+        LOG_FILE=/dev/null
+        DRY_RUN=0
+        VERBOSE=0
+        mkdir -p "$HOME/.ssh"
+        public_key="$HOME/.ssh/id_ed25519.pub"
+        printf "ssh-ed25519 AAAACURRENT local@example\\n" >"$public_key"
+        GH_API_CURRENT="$HOME/.ssh/current-remote-key"
+        GH_API_OLD="$HOME/.ssh/old-remote-key"
+        : >"$GH_API_CURRENT"
+        : >"$GH_API_OLD"
+        : >"$GH_API_MARKER"
+        command_exists() { [[ $1 == gh ]]; }
+        gh() {
+            case "${1:-}:${2:-}:${3:-}:${4:-}" in
+                "auth:status::") return 0 ;;
+                "api:--silent:user/keys:") return 0 ;;
+                "api:--paginate:user/keys:--jq")
+                    printf "list\\n" >>"$GH_API_MARKER"
+                    if [[ -s $GH_API_CURRENT ]]; then
+                        printf "1\\t%s\\t%s\\n" \
+                            "$(printf current | base64 -w0)" \
+                            "$(base64 -w0 <"$GH_API_CURRENT")"
+                    fi
+                    if [[ -s $GH_API_OLD ]]; then
+                        printf "2\\t%s\\t%s\\n" \
+                            "$(printf old | base64 -w0)" \
+                            "$(base64 -w0 <"$GH_API_OLD")"
+                    fi
+                    ;;
+                "api:-X:POST:user/keys")
+                    for arg in "$@"; do
+                        [[ $arg == key=* ]] && printf "%s" "${arg#key=}" >"$GH_API_CURRENT"
+                    done
+                    [[ $(<"$GH_API_CURRENT") == "ssh-ed25519 AAAACURRENT local@example" ]]
+                    printf "post\\n" >>"$GH_API_MARKER"
+                    ;;
+                "api:-X:DELETE:user/keys/2")
+                    : >"$GH_API_OLD"
+                    printf "delete:2\\n" >>"$GH_API_MARKER"
+                    ;;
+                *) return 90 ;;
+            esac
+        }
+        [[ $(github_detect_state) == gh_key_api_available ]]
+        github_add_ssh_key "$public_key" "leanin-test"
+        [[ $GITHUB_NEW_KEY_STATUS == "cadastrada automaticamente" ]]
+        github_key_exists "$public_key"
+        printf "ssh-ed25519 AAAAOLD old@example" >"$GH_API_OLD"
+        github_list_ssh_keys
+        github_collect_old_ssh_keys "$public_key"
+        [[ ${#GITHUB_OLD_KEY_IDS[@]} == 1 && ${GITHUB_OLD_KEY_IDS[0]} == 2 ]]
+        yesno() { return 0; }
+        github_delete_ssh_keys
+        grep -Fqx post "$GH_API_MARKER"
+        grep -Fqx delete:2 "$GH_API_MARKER"
+        [[ $(grep -Fc list "$GH_API_MARKER") -ge 2 ]]
+    '
+}
+
+if github_api_backend_test >/dev/null 2>&1 \
+    && grep -Fq 'gh api --paginate user/keys' lib/gh \
+    && grep -Fq 'gh api -X POST user/keys' lib/gh \
+    && grep -Fq "gh api -X DELETE \"user/keys/\$id\"" lib/gh \
+    && grep -Fq '_github_key_material' lib/gh \
+    && ! grep -Fq 'ssh_signing_keys' lib/gh \
+    && ! grep -Eq '^[[:space:]]*gh[[:space:]]+ssh-key[[:space:]]+list' lib/gh \
+    && grep -Fq 'if github_ssh_registration_ready; then' lib/control \
+    && grep -Fq 'test_github_ssh || true' lib/control; then
+    ok 'GitHub usa API user/keys, confirma a chave e isola chaves de assinatura'
+else
+    error 'backend GitHub user/keys não está completo'
+    ((failures += 1))
+fi
+
+clipboard_mock() {
+    local scenario=$1 fake_clipboard="$ssh_test_home/clipboard-$1" output=''
+    rm -f "$fake_clipboard"
+    if [[ $scenario != none ]]; then
+        cat >"$fake_bin/wl-copy" <<EOF
+#!/usr/bin/env bash
+cat >/dev/null
+[[ $scenario == success ]]
+EOF
+        chmod +x "$fake_bin/wl-copy"
+    else
+        rm -f "$fake_bin/wl-copy"
+    fi
+    output=$(HOME="$ssh_test_home" PATH="$fake_bin:$PATH" SCENARIO="$scenario" bash -c '
+        set -Eeuo pipefail
+        source lib/log
+        source lib/ssh
+        DRY_RUN=0
+        LOG_FILE=/dev/null
+        SSH_PUBLIC_KEY="$HOME/.ssh/clipboard.pub"
+        mkdir -p "$HOME/.ssh"
+        printf "ssh-ed25519 AAAACLIP mock@example\\n" >"$SSH_PUBLIC_KEY"
+        if [[ $SCENARIO == none ]]; then
+            command_exists() { return 1; }
+        else
+            command_exists() { [[ $1 == wl-copy ]]; }
+        fi
+        print_pubkey
+    ' 2>&1) || return 1
+    case $scenario in
+        success)
+            grep -Fq '[ok] chave pública copiada para o clipboard' <<<"$output"
+            ;;
+        none|failure)
+            grep -Fq '[info] clipboard indisponível; copie a chave manualmente' <<<"$output" \
+                && ! grep -Fq '[ok] chave pública copiada para o clipboard' <<<"$output"
+            ;;
+    esac
+}
+
+if clipboard_mock none && clipboard_mock failure && clipboard_mock success; then
+    ok 'clipboard só confirma cópia quando o comando funciona'
+else
+    error 'estado do clipboard não reflete o resultado do comando'
+    ((failures += 1))
+fi
+
+if HOME="$ssh_test_home" bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ask
+    source lib/env
+    source lib/codex
+    ASSUME_YES=1
+    DRY_RUN=0
+    LOG_FILE=/dev/null
+    mkdir -p "$HOME/.codex/bin"
+    : >"$HOME/.codex/bin/codex"
+    chmod +x "$HOME/.codex/bin/codex"
+    run_cmd() { exit 90; }
+    install_codex
+' >/dev/null 2>&1; then
+    ok '--yes não reinstala Codex existente'
+else
+    error '--yes tentou reinstalar Codex existente'
+    ((failures += 1))
+fi
+
+if HOME="$ssh_test_home" bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ask
+    source lib/codex
+    ASSUME_YES=1
+    DRY_RUN=0
+    LOG_FILE=/dev/null
+    command_exists() { [[ $1 == npm ]]; }
+    npm() { printf "/old/npm/prefix\n"; }
+    if configure_prefix; then exit 1; fi
+    [[ $CODEX_PREFIX_READY == 0 ]]
+' >/dev/null 2>&1; then
+    ok '--yes não troca prefixo npm existente'
+else
+    error '--yes tentou trocar prefixo npm existente'
+    ((failures += 1))
+fi
+
+if flatpak_divergent_output=$(bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/ask
+    source lib/flatpak
+    DRY_RUN=1
+    LOG_FILE=/dev/null
+    FAILURES=()
+    flatpak() {
+        if [[ $1 == remotes && $2 == --columns=name ]]; then
+            printf "flathub\n"
+        elif [[ $1 == remotes && $2 == --show-details ]]; then
+            printf "flathub\tFlathub\thttps://example.invalid/repo/\n"
+        else
+            exit 90
+        fi
+    }
+    run_cmd() { exit 90; }
+    flatpak_remote
+' 2>&1) \
+    && grep -Fq '[dry-run] perguntaria se deve refazer flathub já existe com configuração diferente' <<<"$flatpak_divergent_output" \
+    && ! grep -Fq 'remote-modify' <<<"$flatpak_divergent_output"; then
+    ok 'Flathub divergente pede confirmação e dry-run não o modifica'
+else
+    error 'Flathub divergente não preserva confirmação segura'
+    ((failures += 1))
+fi
+
+service_mock() {
+    local mode=$1
+    local marker="$ssh_test_home/service-$mode"
+    rm -f "$marker"
+    HOME="$ssh_test_home" MODE="$mode" MARKER="$marker" bash -c '
+        set -Eeuo pipefail
+        source lib/log
+        source lib/ask
+        source lib/service
+        VERBOSE=0
+        DRY_RUN=0
+        [[ $MODE == dry ]] && DRY_RUN=1
+        LOG_FILE=/dev/null
+        FAILURES=()
+        systemctl() {
+            case ${1:-} in
+                cat)
+                    [[ $MODE != missing ]]
+                    ;;
+                is-enabled|is-active)
+                    [[ $MODE == active ]]
+                    ;;
+                *)
+                    return 1
+                    ;;
+            esac
+        }
+        run_sudo() {
+            shift
+            printf "%s\n" "$*" >>"$MARKER"
+        }
+        run_cmd() {
+            shift
+            printf "%s\n" "$*" >>"$MARKER"
+        }
+        ask_reconfigure() {
+            case $MODE in
+                inactive-yes) return 0 ;;
+                *) return 1 ;;
+            esac
+        }
+        service_enable system mullvad-daemon.service
+        case $MODE in
+            inactive-yes)
+                ((${#SERVICES_ACTIVATED[@]} == 1))
+                grep -Fqx "systemctl enable --now mullvad-daemon.service" "$MARKER"
+                ;;
+            inactive-no|dry)
+                ((${#SERVICES_SKIPPED[@]} == 1))
+                [[ ! -e $MARKER ]]
+                ;;
+            missing)
+                ((${#SERVICES_SKIPPED[@]} == 1))
+                [[ ! -e $MARKER ]]
+                ;;
+            active)
+                ((${#SERVICES_ALREADY[@]} == 1))
+                [[ ! -e $MARKER ]]
+                ;;
+        esac
+        ((${#FAILURES[@]} == 0))
+    '
+}
+
+if service_mock inactive-yes >/dev/null 2>&1 \
+    && service_mock inactive-no >/dev/null 2>&1 \
+    && service_mock missing >/dev/null 2>&1 \
+    && service_mock active >/dev/null 2>&1 \
+    && service_mock dry >/dev/null 2>&1; then
+    ok 'serviços inativos pedem confirmação; ativos e ausentes são pulados'
+else
+    error 'mock modular de serviços falhou'
+    ((failures += 1))
+fi
+
+if bash -c '
+    set -Eeuo pipefail
+    source lib/log
+    source lib/aur
+    DRY_RUN=0
+    VERBOSE=0
+    PACMAN_BLOCKED=0
+    AUR_HELPER=yay
+    LOG_FILE=/dev/null
+    FAILURES=()
+    AUR_INSTALLED=()
+    AUR_SKIPPED=()
+    AUR_PLANNED=()
+    AUR_ALREADY=()
+    pacman() {
+        [[ ${1:-} == -Qq && ${2:-} == mullvad-vpn-daemon ]]
+    }
+    run_cmd() {
+        exit 90
+    }
+    install mullvad-vpn-bin
+    ((${#FAILURES[@]} == 0))
+    ((${#AUR_SKIPPED[@]} == 1))
+    [[ ${AUR_SKIPPED[0]} == mullvad-vpn-bin ]]
+' >/dev/null 2>&1; then
+    ok 'Mullvad existente bloqueia variante conflitante sem falha'
+else
+    error 'proteção contra conflito Mullvad falhou'
+    ((failures += 1))
+fi
