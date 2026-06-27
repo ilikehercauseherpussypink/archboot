@@ -3,7 +3,8 @@
 step 1 10 'validando estrutura'
 required=(
     install.sh README.md CHANGELOG.md LICENSE .gitignore
-    docs/TROUBLESHOOTING.md docs/APPS.md docs/SAFETY.md docs/assets/leanin.svg
+    docs/TROUBLESHOOTING.md docs/APPS.md docs/SAFETY.md docs/ARCHITECTURE.md
+    docs/assets/leanin.svg
     .github/workflows/check.yml
     scripts/check scripts/github
     scripts/checks/common scripts/checks/structure scripts/checks/bash-syntax scripts/checks/lists

@@ -22,12 +22,12 @@ else
 fi
 # Os padrões abaixo verificam texto-fonte literal, sem expansão nesta execução.
 # shellcheck disable=SC2016
-if grep -Fq 'LEANIN_REPO=https://github.com/ilikehercauseherpussypink/leanin' install.sh \
+if grep -Fq 'LEANIN_REPO=https://github.com/uswl/leanin' install.sh \
     && grep -Fq 'LEANIN_BRANCH=main' install.sh \
     && grep -Fq 'CI_MODE=${LEANIN_CI:-${ARCHBOOT_CI:-0}}' lib/options; then
     ok 'bootstrap remoto aponta para o repositório publicado'
 else
-    error 'default LEANIN_REPO não aponta para ilikehercauseherpussypink/leanin'
+    error 'default LEANIN_REPO não aponta para uswl/leanin'
     ((failures += 1))
 fi
 # shellcheck disable=SC2016
@@ -1743,6 +1743,7 @@ readme_tokens=(
     'docs/TROUBLESHOOTING.md'
     'docs/APPS.md'
     'docs/SAFETY.md'
+    'docs/ARCHITECTURE.md'
     'CHANGELOG.md'
     'cloudflare/README.md'
     'A personal Arch Linux bootstrap built around repeatability'
@@ -1759,7 +1760,7 @@ for token in "${readme_tokens[@]}"; do
 done
 cloudflare_readme_tokens=(
     'https://shelies.org'
-    'https://github.com/ilikehercauseherpussypink/leanin'
+    'https://github.com/uswl/leanin'
 )
 for token in "${cloudflare_readme_tokens[@]}"; do
     if ! grep -Fq "$token" cloudflare/README.md; then
@@ -1800,7 +1801,7 @@ if grep -Fq 'archboot' README.md; then
     error 'README.md contém branding antigo'
     docs_fail=1
 fi
-if rg -n 'archboot|github\.com/ilikehercauseherpussypink/archboot|/home/pc/archboot|docs/assets/archboot\.svg' \
+if rg -n 'archboot|github\.com/ilikehercauseherpussypink/(archboot|leanin)|/home/pc/archboot|docs/assets/archboot\.svg' \
     README.md docs cloudflare CHANGELOG.md >/dev/null 2>&1; then
     error 'documentação contém referência antiga ao repositório, caminho ou asset'
     docs_fail=1
@@ -1897,7 +1898,7 @@ portuguese_prose=(
     'Confira '
     'Cada instalação'
 )
-for markdown_file in docs/TROUBLESHOOTING.md cloudflare/README.md docs/APPS.md docs/SAFETY.md CHANGELOG.md; do
+for markdown_file in docs/TROUBLESHOOTING.md cloudflare/README.md docs/APPS.md docs/SAFETY.md docs/ARCHITECTURE.md CHANGELOG.md; do
     for token in "${portuguese_prose[@]}"; do
         if grep -Fq -- "$token" "$markdown_file"; then
             error "$markdown_file contém prosa em português: $token"
@@ -1905,7 +1906,7 @@ for markdown_file in docs/TROUBLESHOOTING.md cloudflare/README.md docs/APPS.md d
         fi
     done
 done
-for markdown_file in README.md cloudflare/README.md docs/TROUBLESHOOTING.md docs/APPS.md docs/SAFETY.md; do
+for markdown_file in README.md cloudflare/README.md docs/TROUBLESHOOTING.md docs/APPS.md docs/SAFETY.md docs/ARCHITECTURE.md; do
     if ! awk '/^```/ { open = !open } END { exit open ? 1 : 0 }' "$markdown_file"; then
         error "$markdown_file contém bloco de código aberto"
         docs_fail=1
@@ -1965,7 +1966,7 @@ worker_tokens=(
     'env.OWNER'
     'env.REPO'
     'env.BRANCH'
-    'OWNER: "ilikehercauseherpussypink"'
+    'OWNER: "uswl"'
     'REPO: "leanin"'
     'BRANCH: "main"'
 )
@@ -2050,7 +2051,7 @@ assert(response.status === 200, "GET upstream status");
 assert(response.headers.get("Content-Type") === "text/x-shellscript; charset=utf-8", "script content type");
 assert(response.headers.get("X-Content-Type-Options") === "nosniff", "nosniff header");
 assert((await response.text()).startsWith("#!/usr/bin/env bash"), "GET upstream body");
-assert(calls.at(-1).url === "https://raw.githubusercontent.com/ilikehercauseherpussypink/leanin/main/install.sh", "upstream URL");
+assert(calls.at(-1).url === "https://raw.githubusercontent.com/uswl/leanin/main/install.sh", "upstream URL");
 assert(calls.at(-1).method === "GET", "GET upstream method");
 
 response = await worker.fetch(new Request("https://worker.example/", { method: "HEAD" }), {});

@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 LEANIN_VERSION='0.1.1'
 if [[ ! -v LEANIN_REPO ]]; then
-    LEANIN_REPO=https://github.com/ilikehercauseherpussypink/leanin
+    LEANIN_REPO=https://github.com/uswl/leanin
 fi
 if [[ ! -v LEANIN_BRANCH ]]; then
     LEANIN_BRANCH=main
