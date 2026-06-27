@@ -1,0 +1,137 @@
+# shellcheck shell=bash
+step 10 11 'validando Cloudflare Worker'
+# Shared temporary home initialized by scripts/checks/common before this module is sourced.
+ssh_test_home=${ssh_test_home:?}
+worker=cloudflare/worker.js
+worker_fail=0
+worker_tokens=(
+    '"GET"'
+    '"HEAD"'
+    '"/health"'
+    '"/install.sh"'
+    '"method not allowed", 405'
+    '"not found", 404'
+    'method,'
+    'text/x-shellscript; charset=utf-8'
+    'X-Content-Type-Options'
+    "raw.githubusercontent.com/\${owner}/\${repo}/\${branch}/install.sh"
+    'env.OWNER'
+    'env.REPO'
+    'env.BRANCH'
+    'OWNER: "uswl"'
+    'REPO: "leanin"'
+    'BRANCH: "main"'
+)
+for token in "${worker_tokens[@]}"; do
+    if ! grep -Fq "$token" "$worker"; then
+        error "Worker não contém requisito: $token"
+        worker_fail=1
+    fi
+done
+upstream_assignment="const upstreamUrl = \`https://raw.githubusercontent.com/\${owner}/\${repo}/\${branch}/install.sh\`;"
+if ! grep -Fq "$upstream_assignment" "$worker"; then
+    error 'Worker não monta a URL upstream em uma única linha exata'
+    worker_fail=1
+fi
+if awk '
+    /raw\.githubusercontent\.com\/\$\{owner\}\// && $0 !~ /\$\{repo\}/ {
+        if ((getline next_line) > 0 && next_line ~ /\$\{repo\}/) {
+            found = 1
+        }
+    }
+    END { exit found ? 0 : 1 }
+' "$worker"; then
+    error 'Worker contém quebra de linha entre owner e repo na URL upstream'
+    worker_fail=1
+fi
+if grep -Fq 'searchParams' "$worker"; then
+    error 'Worker permite configuração por query string'
+    worker_fail=1
+fi
+if grep -Eq 'STABLE_REF|DEV_REF|/channel|dev\.shelies\.org' "$worker"; then
+    error 'Worker contém canal stable/dev desnecessário'
+    worker_fail=1
+else
+    ok 'Worker permanece simples e baseado em main'
+fi
+worker_eval=$(printf '%s%s' 'ev' 'al')
+if grep -Fq "$worker_eval" "$worker"; then
+    error 'Worker contém eval'
+    worker_fail=1
+fi
+worker_secret_regex='gh''p_|github_''pat_|s''k-|OPENAI_''API_KEY|Authorization:[[:space:]]*Bearer|api[_-]?key[[:space:]]*='
+if grep -EIn "$worker_secret_regex" "$worker" >/dev/null 2>&1; then
+    error 'Worker contém possível token ou segredo'
+    worker_fail=1
+fi
+if command -v node >/dev/null 2>&1; then
+    if node --check "$worker"; then
+        ok 'node --check cloudflare/worker.js'
+    else
+        error 'sintaxe JavaScript inválida no Worker'
+        worker_fail=1
+    fi
+    worker_module="$ssh_test_home/worker.mjs"
+    cp "$worker" "$worker_module"
+    if node --input-type=module - "$worker_module" <<'EOF'
+import { pathToFileURL } from "node:url";
+
+const { default: worker } = await import(pathToFileURL(process.argv[2]).href);
+const calls = [];
+globalThis.fetch = async (url, init) => {
+  calls.push({ url: String(url), method: init.method });
+  return new Response("#!/usr/bin/env bash\necho leanin\n", { status: 200 });
+};
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+
+let response = await worker.fetch(new Request("https://worker.example/health"), {});
+assert(response.status === 200, "health status");
+assert((await response.text()) === "ok\n", "health body");
+assert(calls.length === 0, "health should not fetch upstream");
+
+response = await worker.fetch(new Request("https://worker.example/", { method: "POST" }), {});
+assert(response.status === 405, "invalid method status");
+assert(response.headers.get("Allow") === "GET, HEAD", "invalid method allow");
+
+response = await worker.fetch(new Request("https://worker.example/missing"), {});
+assert(response.status === 404, "missing path status");
+
+response = await worker.fetch(new Request("https://worker.example/install.sh"), {});
+assert(response.status === 200, "GET upstream status");
+assert(response.headers.get("Content-Type") === "text/x-shellscript; charset=utf-8", "script content type");
+assert(response.headers.get("X-Content-Type-Options") === "nosniff", "nosniff header");
+assert((await response.text()).startsWith("#!/usr/bin/env bash"), "GET upstream body");
+assert(calls.at(-1).url === "https://raw.githubusercontent.com/uswl/leanin/main/install.sh", "upstream URL");
+assert(calls.at(-1).method === "GET", "GET upstream method");
+
+response = await worker.fetch(new Request("https://worker.example/", { method: "HEAD" }), {});
+assert(response.status === 200, "HEAD upstream status");
+assert(response.body === null, "HEAD body must be null");
+assert(calls.at(-1).method === "HEAD", "HEAD upstream method");
+
+globalThis.fetch = async () => new Response("missing", { status: 404 });
+response = await worker.fetch(new Request("https://worker.example/"), {});
+assert(response.status === 502, "upstream failure status");
+EOF
+    then
+        ok 'Worker responde corretamente a métodos, paths e upstream mockado'
+    else
+        error 'teste funcional do Worker falhou'
+        worker_fail=1
+    fi
+else
+    skip 'node não instalado; sintaxe do Worker não verificada'
+fi
+if awk '/^```/ { open = !open } END { exit open ? 1 : 0 }' cloudflare/README.md; then
+    ok 'blocos Markdown do README Cloudflare estão fechados'
+else
+    error 'cloudflare/README.md contém bloco de código aberto'
+    worker_fail=1
+fi
+if (( worker_fail )); then
+    ((failures += 1))
+else
+    ok 'Cloudflare Worker válido'
+fi

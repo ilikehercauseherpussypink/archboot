@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+CHECK_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/checks" && pwd)
+# shellcheck source=scripts/checks/common
+source "$CHECK_DIR/common"
+
+check_modules=(
+    structure
+    bash-syntax
+    lists
+    repository
+    safety
+    bootstrap
+    installer-controls
+    docs
+    workflow
+    worker
+    shellcheck
+)
+
+for check_module in "${check_modules[@]}"; do
+    # shellcheck source=/dev/null
+    source "$ROOT/scripts/checks/$check_module"
+done
+
+if (( failures > 0 )); then
+    error "$failures grupo(s) de validação falharam"
+    exit 1
+fi
+printf '\n> [ok] checks passed\n'
