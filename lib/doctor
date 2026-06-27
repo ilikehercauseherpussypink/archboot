@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+
+_doctor_essential_failure() {
+    error "$1"
+    ((DOCTOR_FAILURES += 1))
+}
+
+_doctor_section() {
+    printf '\n%s\n' "$1"
+}
+
+_doctor_ci() {
+    info 'modo CI: diagnóstico do host pulado'
+    if [[ -s $LEANIN_ROOT/services/system ]]; then
+        ok 'lista services/system disponível'
+    else
+        _doctor_essential_failure 'services/system ausente ou vazio'
+    fi
+}
+
+_doctor_system() {
+    if arch; then
+        ok 'Arch Linux'
+    else
+        _doctor_essential_failure 'Arch Linux não detectado'
+    fi
+
+    if root; then
+        _doctor_essential_failure 'execução como root; use um usuário comum'
+    else
+        ok 'usuário comum'
+    fi
+
+    if type -P sudo >/dev/null 2>&1; then
+        ok 'sudo'
+    else
+        _doctor_essential_failure 'sudo ausente'
+    fi
+
+    if command_exists curl \
+        && curl -fsSLI --retry 1 --connect-timeout 5 --max-time 12 \
+            https://archlinux.org/ >/dev/null 2>&1; then
+        ok 'internet'
+    else
+        _doctor_essential_failure 'internet indisponível; teste: curl -I https://archlinux.org'
+    fi
+
+    if command_exists pacman; then
+        ok 'pacman'
+    else
+        _doctor_essential_failure 'pacman ausente'
+    fi
+
+    if [[ -e /var/lib/pacman/db.lck ]]; then
+        _doctor_essential_failure 'pacman lock ativo'
+    else
+        ok 'pacman lock livre'
+    fi
+}
+
+_doctor_packages() {
+    local helper='none'
+
+    if command_exists flatpak; then
+        ok 'Flatpak'
+        if flatpak remotes --columns=name 2>/dev/null | grep -Fxq flathub; then
+            ok 'Flathub'
+        else
+            info 'flathub não configurado'
+        fi
+    else
+        info 'Flatpak não disponível'
+    fi
+
+    if command_exists paru; then
+        helper=paru
+    elif command_exists yay; then
+        helper=yay
+    fi
+    if [[ $helper == none ]]; then
+        info 'AUR helper: none'
+    else
+        ok "AUR helper: $helper"
+    fi
+
+}
+
+_doctor_tools() {
+    local codex_path=''
+
+    if command_exists git; then
+        ok 'Git'
+    else
+        info 'Git não disponível'
+    fi
+
+    if command_exists npm; then
+        ok 'npm'
+    else
+        info 'npm não disponível'
+    fi
+
+    if [[ -x $HOME/.codex/bin/codex ]]; then
+        ok 'Codex: ~/.codex/bin/codex'
+    elif codex_path=$(command -v codex 2>/dev/null); then
+        info "Codex encontrado no PATH: $codex_path"
+    else
+        info 'Codex não detectado'
+    fi
+}
+
+_doctor_github() {
+    local ssh_output='' ssh_status=0 ssh_key_present=0 remote_keys=''
+
+    if command_exists gh; then
+        if gh auth status >/dev/null 2>&1; then
+            ok 'GitHub CLI autenticado'
+            if gh api --silent user/keys >/dev/null 2>&1; then
+                ok 'GitHub API de chaves SSH disponível'
+            else
+                warn 'GitHub API de chaves SSH indisponível'
+                info 'corrija: gh auth refresh -h github.com -s admin:public_key'
+            fi
+        else
+            warn 'GitHub CLI não autenticado'
+            info 'login: gh auth login -h github.com -p ssh -s admin:public_key --web'
+            info 'GitHub SSH key management pendente'
+        fi
+    else
+        info 'GitHub CLI não disponível'
+        info 'GitHub SSH key management pendente'
+    fi
+
+    if [[ -f $HOME/.ssh/id_ed25519.pub ]]; then
+        ssh_key_present=1
+        ok 'chave SSH local: ~/.ssh/id_ed25519.pub'
+        if gh auth status >/dev/null 2>&1 \
+            && remote_keys=$(gh api user/keys --jq '.[].key' 2>/dev/null) \
+            && grep -Fxq "$(<"$HOME/.ssh/id_ed25519.pub")" <<<"$remote_keys"; then
+            ok 'chave SSH local registrada no GitHub'
+        fi
+    else
+        info 'SSH key padrão não encontrada'
+    fi
+
+    if command_exists ssh && command_exists timeout; then
+        set +e
+        ssh_output=$(timeout 10 ssh -T -o BatchMode=yes -o ConnectTimeout=5 \
+            -o ConnectionAttempts=1 -o StrictHostKeyChecking=accept-new \
+            -o UserKnownHostsFile=/dev/null git@github.com 2>&1)
+        ssh_status=$?
+        set -e
+        if [[ $ssh_output == *'successfully authenticated'* \
+            || $ssh_output == *"You've successfully authenticated"* \
+            || $ssh_output == *'does not provide shell access'* ]]; then
+            ok 'SSH GitHub'
+        elif (( ! ssh_key_present )) || [[ $ssh_output == *'Permission denied (publickey)'* ]]; then
+            info 'SSH GitHub pendente; registre a chave pública no GitHub'
+        else
+            info "SSH GitHub falhou (código $ssh_status)"
+        fi
+    else
+        info 'teste SSH GitHub pulado'
+    fi
+}
+
+_doctor_services() {
+    local service=mullvad-daemon.service
+    if [[ -s $LEANIN_ROOT/services/system ]]; then
+        ok 'lista services/system disponível'
+    else
+        _doctor_essential_failure 'services/system ausente ou vazio'
+    fi
+    if ! command_exists systemctl; then
+        info 'systemctl não disponível'
+        return 0
+    fi
+    if ! systemctl cat "$service" >/dev/null 2>&1; then
+        info "$service ausente"
+    elif systemctl is-active --quiet "$service" >/dev/null 2>&1; then
+        ok "$service ativo"
+    else
+        info "$service inativo"
+    fi
+}
+
+doctor_run() {
+    DOCTOR_FAILURES=0
+    printf '\ndoctor\n'
+
+    if [[ ${CI_MODE:-0} == 1 ]]; then
+        _doctor_section 'sistema'
+        _doctor_ci
+    else
+        _doctor_section 'sistema'
+        _doctor_system
+        _doctor_section 'pacotes'
+        _doctor_packages
+        _doctor_section 'ferramentas'
+        _doctor_tools
+        _doctor_section 'integrações'
+        _doctor_github
+        _doctor_section 'serviços'
+        _doctor_services
+    fi
+
+    if (( DOCTOR_FAILURES > 0 )); then
+        error "diagnóstico encontrou $DOCTOR_FAILURES problema(s) essencial(is)"
+        return 1
+    fi
+    ok 'diagnóstico concluído'
+}

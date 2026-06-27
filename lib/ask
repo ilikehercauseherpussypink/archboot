@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+
+ASK_PROMPT_PREFIX=${ASK_PROMPT_PREFIX:-'> [?]'}
+
+_ask_tty_path() {
+    printf '%s' /dev/tty
+}
+
+is_interactive() {
+    local tty='' fd
+
+    tty=$(_ask_tty_path)
+    [[ -n $tty ]] || return 1
+    if ! { exec {fd}<>"$tty"; } 2>/dev/null; then
+        return 1
+    fi
+    exec {fd}>&-
+}
+
+_ask_read_tty() {
+    local message=$1 tty='' answer='' fd
+
+    tty=$(_ask_tty_path)
+    if ! { exec {fd}<>"$tty"; } 2>/dev/null; then
+        return 1
+    fi
+    printf '%s' "$message" >&"$fd"
+    IFS= read -r answer <&"$fd" || answer=''
+    exec {fd}>&-
+    ASK_REPLY=$answer
+}
+
+yesno() {
+    local question=$1 default=${2:-n} answer prompt_hint
+
+    if (( ${ASSUME_YES:-0} )); then
+        [[ $default == s || $default == y ]]
+        return
+    fi
+    if (( ${DRY_RUN:-0} || ${CI_MODE:-0} == 1 || ${PLAN_ONLY:-0} || ${DOCTOR_ONLY:-0} )); then
+        [[ $default == s || $default == y ]]
+        return
+    fi
+    if ! is_interactive; then
+        [[ $default == s || $default == y ]]
+        return
+    fi
+
+    if [[ $default == s || $default == y ]]; then
+        prompt_hint='S/n'
+    else
+        prompt_hint='s/N'
+    fi
+
+    while true; do
+        if ! _ask_read_tty "$ASK_PROMPT_PREFIX $question [$prompt_hint] "; then
+            answer=''
+        else
+            answer=$ASK_REPLY
+        fi
+        answer=${answer,,}
+        [[ -z $answer ]] && answer=$default
+        case $answer in
+            s|sim|y|yes) return 0 ;;
+            n|nao|não|no) return 1 ;;
+            *) warn 'responda com s ou n' ;;
+        esac
+    done
+}
+
+ask_reconfigure() {
+    local description=$1 question=${2:-"$1. deseja refazer?"}
+
+    if (( ${DRY_RUN:-0} )); then
+        printf '> [dry-run] perguntaria se deve refazer %s\n' "$description"
+        return 1
+    fi
+    if (( ${ASSUME_YES:-0} || ${CI_MODE:-0} == 1 || ${PLAN_ONLY:-0} || ${DOCTOR_ONLY:-0} )); then
+        return 1
+    fi
+    yesno "$question" n
+}
+
+ask_additive() {
+    local question=$1
+
+    if (( ${DRY_RUN:-0} )); then
+        printf '> [dry-run] perguntaria se deve %s\n' "$question"
+        return 0
+    fi
+    if (( ${ASSUME_YES:-0} )); then
+        return 0
+    fi
+    if (( ${CI_MODE:-0} == 1 || ${PLAN_ONLY:-0} || ${DOCTOR_ONLY:-0} )); then
+        return 1
+    fi
+    yesno "$question" s
+}
+
+prompt() {
+    local variable=$1 question=$2 default=${3:-} answer
+
+    if (( ${ASSUME_YES:-0} || ${DRY_RUN:-0} || ${CI_MODE:-0} == 1 \
+        || ${PLAN_ONLY:-0} || ${DOCTOR_ONLY:-0} )); then
+        printf -v "$variable" '%s' "$default"
+        return 0
+    fi
+    if ! is_interactive; then
+        printf -v "$variable" '%s' "$default"
+        return 0
+    fi
+
+    if [[ -n $default ]]; then
+        if ! _ask_read_tty "$ASK_PROMPT_PREFIX $question [$default]: "; then
+            answer=''
+        else
+            answer=$ASK_REPLY
+        fi
+        answer=${answer:-$default}
+    else
+        if ! _ask_read_tty "$ASK_PROMPT_PREFIX $question: "; then
+            answer=''
+        else
+            answer=$ASK_REPLY
+        fi
+    fi
+    printf -v "$variable" '%s' "$answer"
+}
+
+pause() {
+    local message=${1:-'Pressione Enter para continuar.'}
+    (( ${ASSUME_YES:-0} || ${DRY_RUN:-0} || ${CI_MODE:-0} == 1 \
+        || ${PLAN_ONLY:-0} || ${DOCTOR_ONLY:-0} )) && return 0
+    is_interactive || return 0
+    _ask_read_tty "$ASK_PROMPT_PREFIX $message" || true
+}

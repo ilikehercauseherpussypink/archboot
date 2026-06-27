@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+arch() {
+    [[ -r /etc/os-release ]] || return 1
+    # shellcheck disable=SC1091
+    source /etc/os-release
+    [[ ${ID:-} == arch || " ${ID_LIKE:-} " == *' arch '* ]]
+}
+
+root() {
+    (( EUID == 0 ))
+}
+
+sudo() {
+    local sudo_bin=''
+    sudo_bin=$(type -P sudo 2>/dev/null || true)
+    [[ -n $sudo_bin ]] || die 'sudo não está instalado; instale sudo e configure seu usuário'
+    if (( DRY_RUN )); then
+        return 0
+    fi
+    if ! "$sudo_bin" -v; then
+        die 'sudo negado; confirme que seu usuário tem permissão administrativa'
+    fi
+}
+
+net() {
+    command_exists curl || die 'curl não está instalado'
+    curl -fsSLI --retry 2 --connect-timeout 8 --max-time 20 \
+        https://archlinux.org/ >/dev/null 2>&1 \
+        || die 'internet indisponível; teste: curl -I https://archlinux.org'
+}
+
+state() {
+    local state_home=${XDG_STATE_HOME:-$HOME/.local/state}
+    LEANIN_STATE_DIR="$state_home/leanin"
+    LEANIN_LOG_DIR="$LEANIN_STATE_DIR/logs"
+    mkdir -p "$LEANIN_LOG_DIR"
+    chmod 700 "$LEANIN_STATE_DIR" "$LEANIN_LOG_DIR"
+    LOG_FILE="$LEANIN_LOG_DIR/$(date '+%Y%m%d-%H%M%S')-$$.log"
+    : >"$LOG_FILE"
+    chmod 600 "$LOG_FILE"
+    export LEANIN_STATE_DIR LEANIN_LOG_DIR LOG_FILE
+}
+
+lock() {
+    PACMAN_BLOCKED=0
+    if [[ -e /var/lib/pacman/db.lck ]]; then
+        PACMAN_BLOCKED=1
+        warn 'pacman lock ativo; pacman e AUR serão pulados'
+        info 'feche pacman/paru/yay em execução; não remova o lock sem verificar o processo'
+    else
+        ok 'pacman sem lock'
+    fi
+    export PACMAN_BLOCKED
+}

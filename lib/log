@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+redact_sensitive() {
+    sed -E \
+        -e 's/-----BEGIN\\ [A-Z0-9\\ ]*PRIVATE\\ KEY-----.*-----END\\ [A-Z0-9\\ ]*PRIVATE\\ KEY-----/[REDACTED PRIVATE KEY]/g' \
+        -e 's/gh[pousr]_[A-Za-z0-9_]+/[REDACTED_GITHUB_TOKEN]/g' \
+        -e 's/github_pat_[A-Za-z0-9_]+/[REDACTED_GITHUB_TOKEN]/g' \
+        -e 's/xoxb-[A-Za-z0-9-]+/[REDACTED_SLACK_TOKEN]/g' \
+        -e 's/(Authorization:[[:space:]]*Bearer)[[:space:]]+[^[:space:]]+/\1 [REDACTED]/Ig' \
+        | awk '
+            /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/ {
+                print "[REDACTED PRIVATE KEY]"
+                if ($0 ~ /-----END [A-Z0-9 ]*PRIVATE KEY-----/) {
+                    next
+                }
+                private_key = 1
+                next
+            }
+            private_key && /-----END [A-Z0-9 ]*PRIVATE KEY-----/ {
+                private_key = 0
+                next
+            }
+            private_key { next }
+            { print }
+        '
+}
+
+step() {
+    local current=$1 total=$2 name=$3
+    printf '\n> Etapa %s/%s: %s\n' "$current" "$total" "$name"
+}
+
+info()  { printf '> [info] %s\n' "$*"; }
+ok()    { printf '> [ok] %s\n' "$*"; }
+skip()  { printf '> [skip] %s\n' "$*"; }
+warn()  { printf '> [warn] %s\n' "$*" >&2; }
+error() { printf '> [error] %s\n' "$*" >&2; }
+
+die() {
+    error "$*"
+    exit 1
+}

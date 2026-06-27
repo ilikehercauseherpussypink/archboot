@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+
+declare -ag FLATPAK_INSTALLED=() FLATPAK_SKIPPED=()
+declare -ag FLATPAK_PLANNED=() FLATPAK_ALREADY=()
+FLATPAK_AVAILABLE=1
+FLATHUB_REPO_URL='https://dl.flathub.org/repo/flathub.flatpakrepo'
+FLATHUB_REMOTE_URL='https://dl.flathub.org/repo/'
+
+flatpak_missing() {
+    ! flatpak list --app --columns=application 2>/dev/null | grep -Fxq "$1"
+}
+
+flatpak_remote() {
+    local remote_url=''
+    if flatpak remotes --columns=name 2>/dev/null | grep -Fxq flathub; then
+        remote_url=$(flatpak remotes --show-details --columns=name,url 2>/dev/null \
+            | awk -F '\t' '$1 == "flathub" { print $3; exit }')
+        if [[ -z $remote_url || $remote_url == "$FLATHUB_REMOTE_URL" ]]; then
+            skip 'Flathub já configurado'
+            return 0
+        fi
+        if ! ask_reconfigure "flathub já existe com configuração diferente ($remote_url)" \
+            'flathub já existe com configuração diferente. deseja corrigir?'; then
+            skip 'configuração atual do Flathub mantida'
+            return 0
+        fi
+        if (( DRY_RUN )); then
+            dry_run_msg flatpak remote-modify --url "$FLATHUB_REMOTE_URL" flathub
+            return 0
+        fi
+        if run_cmd 'corrigir flathub' flatpak remote-modify --url "$FLATHUB_REMOTE_URL" flathub; then
+            ok 'Flathub corrigido'
+            return 0
+        fi
+        error 'falha ao corrigir Flathub'
+        FAILURES+=('flatpak:flathub')
+        return 1
+    fi
+    if (( DRY_RUN )); then
+        dry_run_msg flatpak remote-add --if-not-exists flathub \
+            "$FLATHUB_REPO_URL"
+        printf '> [dry-run] configuraria o remote Flathub\n'
+        return 0
+    fi
+    if run_cmd 'configurar flathub' flatpak remote-add --if-not-exists flathub \
+        "$FLATHUB_REPO_URL"; then
+        ok 'Flathub configurado'
+    else
+        error 'falha ao configurar Flathub'
+        info 'teste: flatpak remotes'
+        FAILURES+=('flatpak:flathub')
+        return 1
+    fi
+}
+
+flatpak_setup() {
+    if ! command_exists flatpak; then
+        if (( ${SKIP_PACMAN:-0} )); then
+            FLATPAK_AVAILABLE=0
+            skip 'flatpak ausente e pacman desativado por flag'
+            return 1
+        fi
+        info 'flatpak ausente; instalando via pacman'
+        pacman_install flatpak
+    fi
+    if ! command_exists flatpak && (( ! DRY_RUN )); then
+        FLATPAK_AVAILABLE=0
+        warn 'flatpak indisponível; fonte Flatpak será pulada'
+        info 'teste: flatpak --version'
+        return 1
+    fi
+    if command_exists flatpak; then
+        ok 'Flatpak disponível'
+    elif (( DRY_RUN )); then
+        printf '> [dry-run] Flatpak ficaria disponível após instalação\n'
+    fi
+    flatpak_remote || return 1
+}
+
+flatpak_install() {
+    local app already_before=${#FLATPAK_ALREADY[@]} already_count index
+    for app in "$@"; do
+        if (( ! FLATPAK_AVAILABLE )); then
+            skip "$app: flatpak indisponível"
+            FLATPAK_SKIPPED+=("$app")
+            continue
+        fi
+        if command_exists flatpak && ! flatpak_missing "$app"; then
+            (( VERBOSE )) && skip "$app já instalado"
+            printf 'SKIP flatpak already installed: %s\n' "$app" >>"$LOG_FILE"
+            FLATPAK_SKIPPED+=("$app")
+            FLATPAK_ALREADY+=("$app")
+            continue
+        fi
+        if (( DRY_RUN )); then
+            info "$app"
+            run_cmd "flatpak: $app" flatpak install -y flathub "$app"
+            FLATPAK_PLANNED+=("$app")
+            continue
+        fi
+        info "instalando $app"
+        if run_cmd "flatpak: $app" flatpak install -y flathub "$app"; then
+            ok "$app"
+            FLATPAK_INSTALLED+=("$app")
+        else
+            error "pacote falhou: $app"
+            info "teste: flatpak install flathub $app"
+            info "log: $LOG_FILE"
+            FAILURES+=("flatpak:$app")
+        fi
+    done
+    already_count=$((${#FLATPAK_ALREADY[@]} - already_before))
+    if (( ! VERBOSE && already_count > 0 )); then
+        if (( already_count <= 2 )); then
+            for ((index = already_before; index < ${#FLATPAK_ALREADY[@]}; index++)); do
+                skip "${FLATPAK_ALREADY[$index]} já instalado"
+            done
+        else
+            skip "$already_count Flatpaks já instalados"
+        fi
+    fi
+}
